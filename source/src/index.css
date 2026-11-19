@@ -1,0 +1,102 @@
+@import 'tailwindcss';
+/* The public website (website/) has its own CSS; keep it out of the admin build. */
+@source not "../website";
+
+/* ------------------------------------------------------------------ */
+/*  Resoria design tokens — forest green + gold (from the Resoria Evora logo) */
+/* ------------------------------------------------------------------ */
+@theme {
+  /* Brand: the logo's gold on its deep forest green.
+     The emerald scale is remapped to the brand green, so every emerald-*
+     utility in the app (buttons, active nav, badges) follows the brand. */
+  --color-emerald-50: #f0f6f2;
+  --color-emerald-100: #dbeae0;
+  --color-emerald-200: #b8d5c3;
+  --color-emerald-300: #8cb99e;
+  --color-emerald-400: #5d9878;
+  --color-emerald-500: #3b7a5a;
+  --color-emerald-600: #2a6447;
+  --color-emerald-700: #1e5039;
+  --color-emerald-800: #17402e;
+  --color-emerald-900: #103124;
+  --color-emerald-950: #06211a;
+  --color-forest: #06211a; /* logo background */
+  --color-gold: #a88a4e; /* gold for text on light surfaces */
+  --color-gold-light: #c3b078; /* the logo's gold, for use on forest */
+
+  /* Surfaces */
+  --color-canvas: #faf8f3; /* warm ivory page background */
+  --color-card: #ffffff;
+  --color-line: #e2e8f0; /* slate-200 */
+
+  /* Text / ink */
+  --color-dark: #0f1f12; /* near-black green — primary ink */
+  --color-text: #0f1f12;
+  --color-muted: #64748b; /* slate-500 */
+
+  /* Status accents (emerald / red — no blue or purple).
+     Badges use literal emerald-/amber-/red- utilities; these back the
+     few semantic text usages (positive figures, errors). */
+  --color-success: #1e5039; /* emerald-700 (brand green) */
+  --color-danger: #b91c1c; /* red-700 */
+
+  /* Typography — one sans-serif family across the whole UI.
+     serif/display tokens are kept (a few components still reference them)
+     but now resolve to DM Sans, so every heading matches the body text. */
+  --font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* The wordmark's high-contrast serif, for the brand name only */
+  --font-brand: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
+
+  /* Radius */
+  --radius-card: 16px; /* rounded-2xl for cards */
+
+  /* Elevation — flat, shadow-sm only */
+  --shadow-soft: 0 1px 2px 0 rgb(15 31 18 / 0.06);
+  --shadow-pop: 0 1px 2px 0 rgb(15 31 18 / 0.06);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Base                                                              */
+/* ------------------------------------------------------------------ */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-canvas);
+    color: var(--color-dark);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-sans);
+    font-weight: 600;
+  }
+
+  /* Brand-green focus ring for keyboard users */
+  :focus-visible {
+    outline: 2px solid #1e5039;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+}
+
+@layer utilities {
+  .nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+  }
+}

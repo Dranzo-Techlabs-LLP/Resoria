@@ -1,0 +1,27 @@
+# Dependencies and build output (rebuilt from source/)
+node_modules/
+.next/
+source/website/out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Built copies served locally and zipped for cPanel (see DEPLOY.md)
+/admin/
+/site/
+/release/
+
+# Server settings: database password. Lives only on the server (see DEPLOY.md, step 5)
+/api/config.php
+error_log
+*.log
+
+# Local run: throwaway MySQL data and a portable PHP; only the router is shared
+/.localrun/*
+!/.localrun/router.php
+
+# Scratch and OS files
+brand/_*.png
+__pycache__/
+.DS_Store
+Thumbs.db
+.env*

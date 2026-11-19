@@ -1,0 +1,12 @@
+node_modules
+.next
+out
+next-env.d.ts
+*.tsbuildinfo
+.env.local
+*.log
+.DS_Store
+tests/screenshots
+
+# Python bytecode from running the tests
+__pycache__/

@@ -1,0 +1,484 @@
+<?php
+// ------------------------------------------------------------------
+//  Resoria API — front controller / router
+//  All /api/* requests land here (see .htaccess).
+// ------------------------------------------------------------------
+declare(strict_types=1);
+
+namespace Weland;
+
+use Throwable;
+
+require __DIR__ . '/config.php';   // settings — stays on the server
+require __DIR__ . '/lib.php';      // helpers — ships with every release
+cors();
+
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+// Path after ".../api/" -> e.g. "bookings/KV-00001/payments"
+$uri  = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?? '/';
+$uri  = preg_replace('#^.*?/api/?#', '', $uri);
+$path = trim((string)$uri, '/');
+$seg  = $path === '' ? [] : explode('/', $path);
+
+try {
+  // ---------- Public: login ----------
+  if ($method === 'POST' && $path === 'login') {
+    $b = body();
+    $email = strtolower(trim($b['email'] ?? ''));
+    $password = (string)($b['password'] ?? '');
+    $st = db()->prepare('SELECT * FROM users WHERE LOWER(email) = ? LIMIT 1');
+    $st->execute([$email]);
+    $u = $st->fetch();
+    if (!$u || !password_verify($password, $u['password_hash'])) fail('Incorrect email or password.', 401);
+    if ((int)$u['active'] !== 1) fail('This account is inactive.', 403);
+    $token = bin2hex(random_bytes(32));
+    db()->prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, NOW())')->execute([$token, $u['id']]);
+    db()->prepare('UPDATE users SET last_login = CURDATE() WHERE id = ?')->execute([$u['id']]);
+    json_out(['token' => $token, 'user' => public_user($u, true)]);
+  }
+
+  // ---------- Public: enquiry form on the website ----------
+  //  The marketing site at "/" sends enquiries on WhatsApp and posts a copy
+  //  here; no session needed. Mails the resort at ENQUIRY_TO_EMAIL (config.php),
+  //  or logs it. The site doesn't show guests this reply.
+  if ($method === 'POST' && $path === 'enquiry') {
+    $b = body();
+
+    // Honeypot: hidden from people, filled in by bots. Pretend it worked.
+    if (trim((string)($b['website'] ?? '')) !== '') json_out(['ok' => true]);
+
+    // One-line fields: strip CR/LF so nothing can leak into mail headers.
+    $line = fn(string $k): string => trim(preg_replace('/[\r\n]+/', ' ', (string)($b[$k] ?? '')));
+    $e = [
+      'name'     => $line('name'),
+      'phone'    => $line('phone'),
+      'email'    => $line('email'),
+      'stay'     => $line('stay'),
+      'checkIn'  => $line('checkIn'),
+      'checkOut' => $line('checkOut'),
+      'guests'   => (int)($b['guests'] ?? 0),
+      'notes'    => trim((string)($b['notes'] ?? '')),
+    ];
+    $isDate = fn(string $d): bool => (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)
+      && checkdate((int)substr($d, 5, 2), (int)substr($d, 8, 2), (int)substr($d, 0, 4));
+
+    if (strlen($e['name']) < 2 || strlen($e['name']) > 200) fail('Enter your name.');
+    if (strlen(preg_replace('/\D/', '', $e['phone'])) < 10 || strlen($e['phone']) > 40) fail('Enter a phone number with at least 10 digits.');
+    if (!filter_var($e['email'], FILTER_VALIDATE_EMAIL)) fail('Enter a valid email address.');
+    if ($e['stay'] === '' || strlen($e['stay']) > 100) fail('Choose a stay.');
+    if (!$isDate($e['checkIn']) || !$isDate($e['checkOut'])) fail('Choose your dates.');
+    if ($e['checkOut'] <= $e['checkIn']) fail('Check-out must be after check-in.');
+    if ($e['guests'] < 1 || $e['guests'] > 100) fail('Choose the number of guests.');
+    if (strlen($e['notes']) > 6000) fail('Keep the note under a few paragraphs.');
+
+    $text = implode("\n", [
+      'New enquiry from the website',
+      '',
+      "Name:      {$e['name']}",
+      "Phone:     {$e['phone']}",
+      "Email:     {$e['email']}",
+      "Stay:      {$e['stay']}",
+      "Check-in:  {$e['checkIn']}",
+      "Check-out: {$e['checkOut']}",
+      "Guests:    {$e['guests']}",
+      '',
+      $e['notes'] !== '' ? "Notes:\n{$e['notes']}" : 'Notes: none',
+    ]);
+
+    // Local development: log instead of mailing (see config.example.php).
+    if (defined('ENQUIRY_LOG_ONLY') && ENQUIRY_LOG_ONLY === true) {
+      error_log("[resoria enquiry] (log only)\n$text");
+      json_out(['ok' => true, 'delivered' => false]);
+    }
+
+    // Constants are read with defined() so an older config.php keeps working.
+    $to = defined('ENQUIRY_TO_EMAIL') ? trim((string)ENQUIRY_TO_EMAIL) : '';
+    if ($to === '') {
+      error_log("[resoria enquiry] ENQUIRY_TO_EMAIL is not set; enquiry NOT mailed\n$text");
+      fail('The enquiry could not be sent. Please call or WhatsApp us.', 503);
+    }
+    $host = preg_replace('/[^a-z0-9.-]/i', '', (string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    $from = defined('ENQUIRY_FROM_EMAIL') && ENQUIRY_FROM_EMAIL !== '' ? ENQUIRY_FROM_EMAIL : "no-reply@$host";
+
+    $subject = "Website enquiry: {$e['stay']}, {$e['checkIn']} to {$e['checkOut']} ({$e['name']})";
+    $sent = @mail($to, '=?UTF-8?B?' . base64_encode($subject) . '?=', $text, [
+      'From'         => "Resoria Evora website <$from>",
+      'Reply-To'     => $e['email'],
+      'Content-Type' => 'text/plain; charset=UTF-8',
+    ]);
+    if (!$sent) {
+      error_log("[resoria enquiry] mail() failed; enquiry NOT mailed\n$text");
+      fail('The enquiry could not be sent. Please call or WhatsApp us.', 500);
+    }
+    json_out(['ok' => true, 'delivered' => true]);
+  }
+
+  // ---------- Everything below requires a valid session ----------
+  $me = require_user();
+
+  if ($method === 'GET' && $path === 'me') {
+    json_out(['user' => public_user($me, true)]);
+  }
+
+  if ($method === 'POST' && $path === 'logout') {
+    $t = bearer_token();
+    if ($t) db()->prepare('DELETE FROM sessions WHERE token = ?')->execute([$t]);
+    json_out(['ok' => true]);
+  }
+
+  if ($method === 'GET' && $path === 'bootstrap') {
+    json_out(bootstrap_payload());
+  }
+
+  // ---------- Bookings ----------
+  if ($method === 'POST' && $path === 'bookings') {
+    require_right($me, 'edit_bookings');
+    $b = body();
+    $pdo = db();
+    $pdo->beginTransaction();
+    $inv = $pdo->query('SELECT * FROM invoice_settings WHERE id = 1 FOR UPDATE')->fetch();
+    $ref = $inv['prefix'] . str_pad((string)$inv['next'], (int)$inv['padding'], '0', STR_PAD_LEFT);
+    $pdo->prepare('UPDATE invoice_settings SET next = next + 1 WHERE id = 1')->execute();
+    $id = gen_id('b');
+    $adults = (int)($b['adults'] ?? 0);
+    $kids   = (int)($b['kids'] ?? 0);
+    $guests = max(1, $adults + $kids);
+    $pdo->prepare('INSERT INTO bookings (id, ref, guest, phone, alt_phone, email, villa, check_in, check_out, guests, adults, kids, status, total, source, notes, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURDATE())')
+        ->execute([
+          $id, $ref, $b['guest'] ?? '', $b['phone'] ?? '', ($b['altPhone'] ?? '') ?: null, ($b['email'] ?? '') ?: null, $b['villa'] ?? '',
+          $b['checkIn'] ?? null, $b['checkOut'] ?? null, $guests, $adults, $kids,
+          $b['status'] ?? 'confirmed', (int)round((float)($b['total'] ?? 0)), $b['source'] ?? 'Direct', ($b['notes'] ?? '') ?: null,
+        ]);
+    if (!empty($b['advance'])) {
+      sync_advance($ref, (int)round((float)$b['advance']), $b['advanceMethod'] ?? 'Cash');
+    }
+    sync_b2b_expense($ref, $b['villa'] ?? '', (int)round((float)($b['b2bCommission'] ?? 0)));
+    $pdo->commit();
+    json_out(['ref' => $ref, 'booking' => get_booking($ref)], 201);
+  }
+
+  if ($method === 'PATCH' && count($seg) === 2 && $seg[0] === 'bookings') {
+    $ref = $seg[1];
+    $b = body();
+    if (isset($b['status'])) {
+      require_right($me, $b['status'] === 'cancelled' ? 'cancel_bookings' : 'edit_bookings');
+      db()->prepare('UPDATE bookings SET status = ? WHERE ref = ?')->execute([$b['status'], $ref]);
+    }
+    json_out(['booking' => get_booking($ref)]);
+  }
+
+  // Full edit of a booking's details
+  if ($method === 'PUT' && count($seg) === 2 && $seg[0] === 'bookings') {
+    require_right($me, 'edit_bookings');
+    $ref = $seg[1];
+    $b = body();
+    $exists = db()->prepare('SELECT ref FROM bookings WHERE ref = ?');
+    $exists->execute([$ref]);
+    $found = $exists->fetch();
+    if (!$found) fail('Booking not found.', 404);
+    $ref = $found['ref']; // the booking's own ref (the URL may differ in letter case)
+    if (($b['status'] ?? '') === 'cancelled') require_right($me, 'cancel_bookings');
+    $pdo = db();
+    $pdo->beginTransaction();
+    $adults = (int)($b['adults'] ?? 0);
+    $kids   = (int)($b['kids'] ?? 0);
+    $guests = max(1, $adults + $kids);
+    $pdo->prepare('UPDATE bookings SET guest=?, phone=?, alt_phone=?, email=?, villa=?, check_in=?, check_out=?, guests=?, adults=?, kids=?, status=?, total=?, source=?, notes=? WHERE ref=?')
+        ->execute([
+          $b['guest'] ?? '', $b['phone'] ?? '', ($b['altPhone'] ?? '') ?: null, ($b['email'] ?? '') ?: null, $b['villa'] ?? '',
+          $b['checkIn'] ?? null, $b['checkOut'] ?? null, $guests, $adults, $kids,
+          $b['status'] ?? 'confirmed', (int)round((float)($b['total'] ?? 0)), $b['source'] ?? 'Direct', ($b['notes'] ?? '') ?: null, $ref,
+        ]);
+    // B2B commission entries are booked under the booking's first room, so they follow a room change
+    if (($b['villa'] ?? '') !== '') {
+      $pdo->prepare("UPDATE expenses SET villa = ? WHERE booking_ref = ? AND category = 'B2B Commission'")
+          ->execute([primary_room($b['villa']), $ref]);
+    }
+    // The advance entered while booking: create / update / remove that one payment
+    if (array_key_exists('advance', $b)) {
+      sync_advance($ref, (int)round((float)($b['advance'] ?? 0)), $b['advanceMethod'] ?? 'Cash');
+    }
+    // Keep the linked B2B expense in sync with the commission field
+    if (array_key_exists('b2bCommission', $b)) {
+      sync_b2b_expense($ref, $b['villa'] ?? '', (int)round((float)$b['b2bCommission']));
+    }
+    $pdo->commit();
+    json_out(['booking' => get_booking($ref)]);
+  }
+
+  // Permanently delete a booking (and its payments and B2B commission entries; other linked expenses stay)
+  if ($method === 'DELETE' && count($seg) === 2 && $seg[0] === 'bookings') {
+    require_right($me, 'cancel_bookings');
+    $ref = $seg[1];
+    $pdo = db();
+    $pdo->beginTransaction();
+    $pdo->prepare('DELETE FROM payments WHERE booking_ref = ?')->execute([$ref]);
+    $pdo->prepare("DELETE FROM expenses WHERE booking_ref = ? AND category = 'B2B Commission'")->execute([$ref]);
+    $pdo->prepare('DELETE FROM bookings WHERE ref = ?')->execute([$ref]);
+    $pdo->commit();
+    json_out(['ok' => true]);
+  }
+
+  if ($method === 'POST' && count($seg) === 3 && $seg[0] === 'bookings' && $seg[2] === 'payments') {
+    require_right($me, 'record_payments');
+    $ref = $seg[1];
+    $b = body();
+    $kind = ($b['kind'] ?? 'payment') === 'refund' ? 'refund' : 'payment';
+    db()->prepare('INSERT INTO payments (id, booking_ref, date, amount, kind, method, reference, is_advance) VALUES (?,?,?,?,?,?,?,?)')
+        ->execute([gen_id('p'), $ref, $b['date'] ?? date('Y-m-d'), (int)round((float)($b['amount'] ?? 0)), $kind,
+                   ($b['method'] ?? '') ?: null, ($b['reference'] ?? '') ?: null, (!empty($b['advance']) && $kind === 'payment') ? 1 : 0]);
+    json_out(['booking' => get_booking($ref)], 201);
+  }
+
+  // ---------- Payments: edit / delete a single ledger line ----------
+  if (($method === 'PUT' || $method === 'DELETE') && count($seg) === 2 && $seg[0] === 'payments') {
+    require_right($me, 'record_payments');
+    $st = db()->prepare('SELECT booking_ref FROM payments WHERE id = ?');
+    $st->execute([$seg[1]]);
+    $row = $st->fetch();
+    if (!$row) fail('Payment not found.', 404);
+    if ($method === 'DELETE') {
+      db()->prepare('DELETE FROM payments WHERE id = ?')->execute([$seg[1]]);
+    } else {
+      $b = body();
+      $kind = ($b['kind'] ?? 'payment') === 'refund' ? 'refund' : 'payment';
+      db()->prepare('UPDATE payments SET date = ?, amount = ?, kind = ?, method = ?, reference = ?, is_advance = ? WHERE id = ?')
+          ->execute([$b['date'] ?? date('Y-m-d'), (int)round((float)($b['amount'] ?? 0)), $kind,
+                     ($b['method'] ?? '') ?: null, ($b['reference'] ?? '') ?: null,
+                     (!empty($b['advance']) && $kind === 'payment') ? 1 : 0, $seg[1]]);
+    }
+    json_out(['booking' => get_booking($row['booking_ref'])]);
+  }
+
+  // ---------- Expenses ----------
+  if ($method === 'POST' && $path === 'expenses') {
+    require_right($me, 'edit_expenses');
+    $b = body();
+    $id = gen_id('e');
+    $row = [
+      'id' => $id, 'date' => $b['date'] ?? date('Y-m-d'), 'category' => $b['category'] ?? 'Misc',
+      'villa' => $b['villa'] ?? '', 'bookingRef' => ($b['bookingRef'] ?? '') ?: null,
+      'description' => $b['description'] ?? '', 'amount' => (int)round((float)($b['amount'] ?? 0)),
+    ];
+    $row = normalize_expense_link($row);
+    // "Collected externally" only applies to a B2B commission; the column is only touched when it is sent,
+    // so ordinary expenses keep saving before the migration has been run.
+    if (array_key_exists('external', $b) && !is_bool($b['external'])) fail('Invalid option.');
+    $row['external'] = $row['category'] === 'B2B Commission' && !empty($b['external']);
+    if (array_key_exists('external', $b)) {
+      db()->prepare('INSERT INTO expenses (id, date, category, villa, booking_ref, description, amount, `external`) VALUES (?,?,?,?,?,?,?,?)')
+          ->execute([$row['id'], $row['date'], $row['category'], $row['villa'], $row['bookingRef'], $row['description'], $row['amount'], (int)$row['external']]);
+    } else {
+      db()->prepare('INSERT INTO expenses (id, date, category, villa, booking_ref, description, amount) VALUES (?,?,?,?,?,?,?)')
+          ->execute([$row['id'], $row['date'], $row['category'], $row['villa'], $row['bookingRef'], $row['description'], $row['amount']]);
+    }
+    json_out(['expense' => $row], 201);
+  }
+
+  // Edit an expense in place (fields left out keep their current value)
+  if ($method === 'PUT' && count($seg) === 2 && $seg[0] === 'expenses') {
+    require_right($me, 'edit_expenses');
+    $st = db()->prepare('SELECT * FROM expenses WHERE id = ?');
+    $st->execute([$seg[1]]);
+    $cur = $st->fetch();
+    if (!$cur) fail('Expense not found.', 404);
+    $b = body();
+    $row = [
+      'id'          => $cur['id'],
+      'date'        => $b['date'] ?? $cur['date'],
+      'category'    => $b['category'] ?? $cur['category'],
+      'villa'       => $b['villa'] ?? $cur['villa'],
+      'bookingRef'  => array_key_exists('bookingRef', $b) ? (($b['bookingRef'] ?? '') ?: null) : $cur['booking_ref'],
+      'description' => $b['description'] ?? $cur['description'],
+      'amount'      => array_key_exists('amount', $b) ? (int)round((float)$b['amount']) : (int)$cur['amount'],
+    ];
+    $row = normalize_expense_link($row);
+    if (array_key_exists('external', $b) && !is_bool($b['external'])) fail('Invalid option.');
+    $wasExternal = (int)($cur['external'] ?? 0) === 1;
+    $row['external'] = $row['category'] === 'B2B Commission'
+      && (array_key_exists('external', $b) ? (bool)$b['external'] : $wasExternal);
+    // touch the column only when it is sent, or when it has to be cleared (the entry stops being a B2B commission)
+    if (array_key_exists('external', $b) || ($wasExternal && !$row['external'])) {
+      db()->prepare('UPDATE expenses SET date = ?, category = ?, villa = ?, booking_ref = ?, description = ?, amount = ?, `external` = ? WHERE id = ?')
+          ->execute([$row['date'], $row['category'], $row['villa'], $row['bookingRef'], $row['description'], $row['amount'], (int)$row['external'], $row['id']]);
+    } else {
+      db()->prepare('UPDATE expenses SET date = ?, category = ?, villa = ?, booking_ref = ?, description = ?, amount = ? WHERE id = ?')
+          ->execute([$row['date'], $row['category'], $row['villa'], $row['bookingRef'], $row['description'], $row['amount'], $row['id']]);
+    }
+    json_out(['expense' => $row]);
+  }
+
+  if ($method === 'DELETE' && count($seg) === 2 && $seg[0] === 'expenses') {
+    require_right($me, 'edit_expenses');
+    db()->prepare('DELETE FROM expenses WHERE id = ?')->execute([$seg[1]]);
+    json_out(['ok' => true]);
+  }
+
+  // ---------- Users ----------
+  if ($method === 'POST' && $path === 'users') {
+    require_right($me, 'manage_users');
+    $b = body();
+    $name  = trim((string)($b['name'] ?? ''));
+    $email = strtolower(trim((string)($b['email'] ?? '')));
+    $role  = (string)($b['role'] ?? '');
+    $pw    = (string)($b['password'] ?? '');
+    if ($name === '') fail('Full name is required.');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) fail('Enter a valid email address.');
+    if (!role_exists($role)) fail('Choose a role.');
+    if (strlen($pw) < 6) fail('Password must be at least 6 characters.');
+    $exists = db()->prepare('SELECT id FROM users WHERE LOWER(email) = ?');
+    $exists->execute([$email]);
+    if ($exists->fetch()) fail('A user with that email already exists.');
+    $id = gen_id('u');
+    db()->prepare('INSERT INTO users (id, name, email, password_hash, role, villa, active, last_login) VALUES (?,?,?,?,?,?,?,NULL)')
+        ->execute([$id, $name, $email, password_hash($pw, PASSWORD_DEFAULT), $role, trim((string)($b['villa'] ?? '')) ?: null,
+                   array_key_exists('active', $b) ? (int)!!$b['active'] : 1]);
+    json_out(['user' => get_user($id)], 201);
+  }
+
+  // Edit a user: name, email, role, room, active, and optionally a new password
+  if ($method === 'PATCH' && count($seg) === 2 && $seg[0] === 'users') {
+    require_right($me, 'manage_users');
+    $id = $seg[1];
+    $st = db()->prepare('SELECT * FROM users WHERE id = ?');
+    $st->execute([$id]);
+    $cur = $st->fetch();
+    if (!$cur) fail('User not found.', 404);
+    $b = body();
+    $name   = array_key_exists('name', $b)   ? trim((string)$b['name']) : $cur['name'];
+    $email  = array_key_exists('email', $b)  ? strtolower(trim((string)$b['email'])) : $cur['email'];
+    $role   = array_key_exists('role', $b)   ? (string)$b['role'] : $cur['role'];
+    $villa  = array_key_exists('villa', $b)  ? (trim((string)$b['villa']) ?: null) : ($cur['villa'] ?? null);
+    $active = array_key_exists('active', $b) ? (int)!!$b['active'] : (int)$cur['active'];
+    $pw     = (string)($b['password'] ?? '');
+
+    if ($name === '') fail('Full name is required.');
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) fail('Enter a valid email address.');
+    if (!role_exists($role)) fail('Choose a role.');
+    if ($pw !== '' && strlen($pw) < 6) fail('Password must be at least 6 characters.');
+    $dup = db()->prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id <> ?');
+    $dup->execute([$email, $id]);
+    if ($dup->fetch()) fail('A user with that email already exists.');
+
+    // Never lock everyone out: you can't disable yourself, and an active user
+    // who can manage users must remain.
+    if ($id === $me['id'] && !$active) fail("You can't disable your own account.");
+    $wasManager = (int)$cur['active'] === 1 && in_array('manage_users', role_rights($cur['role']), true);
+    $isManager  = $active === 1 && in_array('manage_users', role_rights($role), true);
+    if ($wasManager && !$isManager && !other_user_manager_exists($id)) {
+      fail('Keep at least one active user who can manage users, such as an Administrator.');
+    }
+
+    db()->prepare('UPDATE users SET name = ?, email = ?, role = ?, villa = ?, active = ? WHERE id = ?')
+        ->execute([$name, $email, $role, $villa, $active, $id]);
+    if ($pw !== '') {
+      db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([password_hash($pw, PASSWORD_DEFAULT), $id]);
+    }
+    if (!$active) db()->prepare('DELETE FROM sessions WHERE user_id = ?')->execute([$id]);   // sign a disabled user out
+    json_out(['user' => get_user($id)]);
+  }
+
+  // ---------- Roles ----------
+  if ($method === 'POST' && $path === 'roles') {
+    require_right($me, 'manage_users');
+    $b = body();
+    $id = gen_id('r');
+    $name = trim($b['name'] ?? '') ?: 'New role';
+    db()->prepare('INSERT INTO roles (id, name, `system`, rights) VALUES (?,?,0,?)')->execute([$id, $name, json_encode([])]);
+    json_out(['role' => ['id' => $id, 'name' => $name, 'system' => false, 'rights' => []]], 201);
+  }
+
+  if ($method === 'PATCH' && count($seg) === 2 && $seg[0] === 'roles') {
+    require_right($me, 'manage_users');
+    $b = body();
+    $rights = is_array($b['rights'] ?? null) ? array_values($b['rights']) : [];
+    db()->prepare('UPDATE roles SET rights = ? WHERE id = ?')->execute([json_encode($rights), $seg[1]]);
+    json_out(['ok' => true]);
+  }
+
+  // ---------- Invoice settings ----------
+  if ($method === 'PUT' && $path === 'invoice') {
+    require_right($me, 'edit_invoice');
+    $b = body();
+    $cur = db()->query('SELECT * FROM invoice_settings WHERE id = 1')->fetch();
+    $prefix  = $b['prefix']  ?? $cur['prefix'];
+    $next    = isset($b['next'])    ? (int)$b['next']    : (int)$cur['next'];
+    $padding = isset($b['padding']) ? (int)$b['padding'] : (int)$cur['padding'];
+    $terms   = $b['terms']   ?? $cur['terms'];
+    // "Show on invoice" options: only touched when sent, so the other settings save without them
+    $withShow = array_key_exists('showPayments', $b) || array_key_exists('showB2b', $b);
+    $show = [];
+    foreach (['showPayments' => 'show_payments', 'showB2b' => 'show_b2b'] as $key => $col) {
+      if (array_key_exists($key, $b) && !is_bool($b[$key])) fail('Invalid invoice option.');
+      $show[$col] = array_key_exists($key, $b) ? (int)$b[$key] : (int)($cur[$col] ?? 0);
+    }
+    if ($withShow) {
+      db()->prepare('UPDATE invoice_settings SET prefix=?, next=?, padding=?, terms=?, show_payments=?, show_b2b=? WHERE id=1')
+          ->execute([$prefix, $next, $padding, $terms, $show['show_payments'], $show['show_b2b']]);
+    } else {
+      db()->prepare('UPDATE invoice_settings SET prefix=?, next=?, padding=?, terms=? WHERE id=1')
+          ->execute([$prefix, $next, $padding, $terms]);
+    }
+    json_out(['invoice' => public_invoice(db()->query('SELECT * FROM invoice_settings WHERE id = 1')->fetch())]);
+  }
+
+  // ---------- Room overrides (base rate / notes / capacity) ----------
+  //  Only the fields sent are changed; the others keep their saved value.
+  //  Capacity is only for rooms that allow it (CAPACITY_ROOMS) and only touches
+  //  its columns when sent, so base rate / notes saves never depend on them.
+  //  Replies with the saved override, so the app shows what was really stored.
+  if ($method === 'PUT' && count($seg) === 3 && $seg[0] === 'rooms' && $seg[2] === 'override') {
+    require_right($me, 'edit_villas');
+    $name = urldecode($seg[1]);
+    $b = body();
+    // An unreadable body comes back empty; don't treat that as "keep everything".
+    if (!array_intersect(['baseRate', 'notes', 'minGuests', 'maxGuests'], array_keys($b))) fail('Nothing to save.');
+    $load = function () use ($name) {
+      $st = db()->prepare('SELECT * FROM room_overrides WHERE villa = ?');
+      $st->execute([$name]);
+      return $st->fetch() ?: [];
+    };
+    $cur = $load();
+    // A whole number from the body, or the saved value when the field isn't sent.
+    $num = function (string $key, string $col) use ($b, $cur) {
+      if (!array_key_exists($key, $b)) return isset($cur[$col]) ? (int)$cur[$col] : null;
+      $v = $b[$key];
+      if ($v === null || $v === '') return null;
+      if (is_int($v)) return $v;
+      if (is_string($v) && preg_match('/^-?\d{1,9}$/', $v)) return (int)$v;
+      if (is_float($v) && is_finite($v) && floor($v) === $v && abs($v) < 1e9) return (int)$v;
+      fail('Enter whole numbers only.');
+    };
+    $rate  = $num('baseRate', 'base_rate');
+    $notes = array_key_exists('notes', $b) ? $b['notes'] : ($cur['notes'] ?? null);
+    if ($notes !== null && !is_string($notes)) fail('Notes must be text.');
+    if ($rate !== null && ($rate < 0 || $rate > 10000000)) fail('Enter a base rate between ₹0 and ₹1,00,00,000.');
+
+    $withCapacity = array_key_exists('minGuests', $b) || array_key_exists('maxGuests', $b);
+    if (!$withCapacity) {
+      db()->prepare('INSERT INTO room_overrides (villa, base_rate, notes) VALUES (?,?,?)
+                     ON DUPLICATE KEY UPDATE base_rate = VALUES(base_rate), notes = VALUES(notes)')
+          ->execute([$name, $rate, $notes]);
+      json_out(['ok' => true, 'override' => public_override($load())]);
+    }
+    if (!in_array($name, CAPACITY_ROOMS, true)) fail("This room's capacity can't be changed.");
+    $min = $num('minGuests', 'min_guests');
+    $max = $num('maxGuests', 'max_guests');
+    if (($min === null) !== ($max === null)) fail('Enter both the minimum and maximum guests.');
+    if ($min !== null && ($min < 1 || $min > 10000 || $max < 1 || $max > 10000)) {
+      fail('Capacity must be between 1 and 10,000 guests.');
+    }
+    if ($min !== null && $min > $max) fail('Minimum guests can\'t be more than maximum guests.');
+    db()->prepare('INSERT INTO room_overrides (villa, base_rate, notes, min_guests, max_guests) VALUES (?,?,?,?,?)
+                   ON DUPLICATE KEY UPDATE base_rate = VALUES(base_rate), notes = VALUES(notes),
+                                           min_guests = VALUES(min_guests), max_guests = VALUES(max_guests)')
+        ->execute([$name, $rate, $notes, $min, $max]);
+    json_out(['ok' => true, 'override' => public_override($load())]);
+  }
+
+  fail("Not found: $method /$path", 404);
+} catch (Throwable $e) {
+  fail('Server error: ' . $e->getMessage(), 500);
+}

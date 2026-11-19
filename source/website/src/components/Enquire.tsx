@@ -1,0 +1,63 @@
+import { Mail, Phone } from "lucide-react";
+import EnquiryForm from "./EnquiryForm";
+import InstagramIcon from "./InstagramIcon";
+import WhatsAppIcon from "./WhatsAppIcon";
+import { site } from "@/lib/content";
+
+export default function Enquire() {
+  return (
+    <section id="enquire" className="enquire" aria-labelledby="enquire-title">
+      <div className="wrap enquire-grid">
+        <div className="enquire-intro">
+          <h2 id="enquire-title" className="section-title">
+            Tell us your dates. <em>We reply within a day.</em>
+          </h2>
+          <p className="lede">
+            Send the form and it opens WhatsApp with your details filled in. We will come back to
+            you with availability, a rate, and honest advice on which stay suits your group.
+          </p>
+          <ul className="contact-list">
+            <li>
+              <a className="contact-link" href={site.phoneHref}>
+                <Phone size={18} aria-hidden="true" />
+                <span>
+                  <span className="contact-main">{site.phone}</span>
+                  <small>Bookings and enquiries</small>
+                </span>
+              </a>
+            </li>
+            <li>
+              <a className="contact-link" href={site.whatsappHref} target="_blank" rel="noreferrer">
+                <WhatsAppIcon size={18} className="wa-green" />
+                <span>
+                  <span className="contact-main">Message us on WhatsApp</span>
+                  <small>{site.phone}</small>
+                </span>
+              </a>
+            </li>
+            {site.email && (
+              <li>
+                <a className="contact-link" href={`mailto:${site.email}`}>
+                  <Mail size={18} aria-hidden="true" />
+                  <span className="contact-main">{site.email}</span>
+                </a>
+              </li>
+            )}
+            {site.instagram && (
+              <li>
+                <a className="contact-link" href={site.instagram.href} target="_blank" rel="noreferrer">
+                  <InstagramIcon size={18} />
+                  <span>
+                    <span className="contact-main">{site.instagram.handle}</span>
+                    <small>Photos and news on Instagram</small>
+                  </span>
+                </a>
+              </li>
+            )}
+          </ul>
+        </div>
+        <EnquiryForm />
+      </div>
+    </section>
+  );
+}
