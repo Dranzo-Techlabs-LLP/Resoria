@@ -24,6 +24,8 @@ import {
   CollectExpensesModal, CollectRemainingModal, ConfirmModal, RefundModal,
 } from '../components/booking-detail/PaymentModals'
 import { ExpenseModal } from '../components/booking-detail/ExpenseModal'
+import { GuestRatingCard } from '../components/booking-detail/GuestRatingCard'
+import { ShareMenu } from '../components/booking-detail/ShareMenu'
 import type { Booking, BookingCharge } from '../types'
 
 type Popup =
@@ -150,6 +152,10 @@ export function BookingDetail() {
     }
   }
 
+  // Share (WhatsApp / copy) comes first, for every stage except cancelled
+  const share = cancelled ? null : <ShareMenu booking={b} />
+  const headerActions = share || actions ? <>{share}{actions}</> : null
+
   const tag = pre && balance === 0 && b.total > 0
     ? <Pill tone="green">{label} · Fully paid</Pill>
     : <StatusTag label={label} />
@@ -161,7 +167,7 @@ export function BookingDetail() {
         title={b.guest}
         tag={tag}
         subtitle={<span className="nums">{subtitleOf(b)}</span>}
-        actions={actions}
+        actions={headerActions}
         actionsNote={note}
       />
 
@@ -202,6 +208,7 @@ export function BookingDetail() {
               showDownloadAll={(done || (cancelled && refund.status !== 'Pending')) && b.payments.length > 0}
               showDue={!cancelled}
             />
+            {(inHouse || done) && can(user, 'view_ratings') && <GuestRatingCard booking={b} />}
             <StayHistoryCard booking={b} />
           </div>
         </div>

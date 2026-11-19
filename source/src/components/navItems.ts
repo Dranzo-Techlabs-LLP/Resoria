@@ -22,5 +22,5 @@ export const navItems: NavItem[] = [
   { to: '/financial-overview', label: 'Financial Overview', icon: Landmark, right: 'view_accounting' },
   { to: '/users', label: 'Users and Role', icon: Users, right: 'view_users' },
   { to: '/configuration', label: 'Configuration', icon: Settings, right: ['view_villas', 'manage_config'] },
-  { to: '/rating', label: 'Rating', icon: Star, right: 'view_dashboard' },
+  { to: '/rating', label: 'Rating', icon: Star, right: 'view_ratings' },
 ]

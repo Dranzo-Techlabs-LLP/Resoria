@@ -25,9 +25,12 @@ export function ledgerOrder(b: Booking): Payment[] {
     .map((x) => x.p)
 }
 
-/** Every payment with its receipt number by ledger position: "RE-00004-R2". */
+/**
+ * Every payment in ledger order with its receipt number: the fixed `receiptNo` recorded with the payment
+ * ("RE-00004-R2"), or, for an older payment without one, the number by ledger position.
+ */
 export function receiptsOf(b: Booking): { p: Payment; no: string }[] {
-  return ledgerOrder(b).map((p, i) => ({ p, no: `${b.ref}-R${i + 1}` }))
+  return ledgerOrder(b).map((p, i) => ({ p, no: p.receiptNo?.trim() || `${b.ref}-R${i + 1}` }))
 }
 
 /** The advance collected while booking (room payments flagged as advance). */

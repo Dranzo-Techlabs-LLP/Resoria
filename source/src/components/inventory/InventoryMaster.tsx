@@ -9,7 +9,7 @@ import { useToast } from '../ui/Toast'
 import { fieldCls, linkCls, outlineBtnCls, outlineDangerBtnCls, solidBtnCls } from '../styles'
 import { ItemFormModal } from './ItemFormModal'
 import {
-  ActivePill, errMsg, fmtQty, FormError, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls, withCurrent,
+  ActivePill, errMsg, fmtQty, FormError, ReusablePill, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls, withCurrent,
 } from './shared'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
@@ -110,8 +110,13 @@ export function InventoryMaster() {
                 <tr key={i.id} className={`${trCls} ${i.active ? '' : 'bg-[#faf9f6]'}`}>
                   <td className={`${tdCls} nums whitespace-nowrap text-slate-600`}>{i.id}</td>
                   <td className={tdCls}>
-                    <div className={`font-semibold ${i.active ? 'text-dark' : 'text-slate-500'}`}>{i.name}</div>
-                    <div className="mt-0.5 text-[13px] text-slate-500">{fmtQty(i.available)} {i.unit} in stock</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`font-semibold ${i.active ? 'text-dark' : 'text-slate-500'}`}>{i.name}</span>
+                      {i.reusable && <ReusablePill />}
+                    </div>
+                    <div className="mt-0.5 text-[13px] text-slate-500">
+                      {fmtQty(i.available)} {i.unit} in stock{i.reusable && i.inUse > 0 ? ` · ${fmtQty(i.inUse)} in use` : ''}
+                    </div>
                   </td>
                   <td className={tdCls}>{i.category}</td>
                   <td className={tdCls}>{i.unit}</td>
@@ -195,6 +200,7 @@ function DeactivateModal({ item, movements, onClose }: { item: InventoryItem; mo
           The item and its history stay in the system
           {movements > 0 ? ` (${movements} stock ${movements === 1 ? 'movement' : 'movements'})` : ''}.
           {item.available > 0 && ` It still has ${fmtQty(item.available)} ${item.unit} in stock, so it stays visible (greyed) on the Inventory page until that stock is cleared with a stock adjustment.`}
+          {item.reusable && item.inUse > 0 && ` ${fmtQty(item.inUse)} ${item.unit} are still in use and can still be brought back with Return Items.`}
         </p>
         <FormError>{error}</FormError>
         <div className="flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-end">

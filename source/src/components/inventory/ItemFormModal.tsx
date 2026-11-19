@@ -19,6 +19,9 @@ export function ItemFormModal({ item, onClose, onSaved }: { item?: InventoryItem
   const [unit, setUnit] = useState(item?.unit ?? '')
   const [minStock, setMinStock] = useState(item ? String(item.minStock) : '')
   const [opening, setOpening] = useState('0')
+  const [reusable, setReusable] = useState(item?.reusable ?? false)
+  // A reusable item with pieces still out can't become a consumable until they're returned / written off
+  const lockReusable = !!item?.reusable && (item.inUse ?? 0) > 0
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -41,11 +44,11 @@ export function ItemFormModal({ item, onClose, onSaved }: { item?: InventoryItem
     setSaving(true)
     try {
       if (item) {
-        await updateItem(item.id, { name: name.trim(), category, unit, minStock: min })
+        await updateItem(item.id, { name: name.trim(), category, unit, minStock: min, reusable })
         toast.show('Item updated', `${item.id} · ${name.trim()}`)
         onSaved?.(item.id)
       } else {
-        const id = await addItem({ name: name.trim(), category, unit, minStock: min, openingStock: open, active: true })
+        const id = await addItem({ name: name.trim(), category, unit, minStock: min, openingStock: open, active: true, reusable })
         toast.show('Item added', `${id} · ${name.trim()}`)
         onSaved?.(id)
       }
@@ -58,8 +61,12 @@ export function ItemFormModal({ item, onClose, onSaved }: { item?: InventoryItem
 
   const describe = (k: string) => (errors[k] ? `item-${k}-error` : undefined)
 
+  const subtitle = item
+    ? `${item.id} · ${fmtQty(item.available)} ${item.unit} in store${item.reusable && item.inUse > 0 ? ` · ${fmtQty(item.inUse)} in use` : ''}`
+    : undefined
+
   return (
-    <Modal title={editing ? 'Edit item' : 'Add new item'} subtitle={item ? `${item.id} · ${fmtQty(item.available)} ${item.unit} available` : undefined} onClose={onClose} size="lg">
+    <Modal title={editing ? 'Edit item' : 'Add new item'} subtitle={subtitle} onClose={onClose} size="lg">
       <form onSubmit={submit} noValidate className="space-y-4">
         <div>
           <label htmlFor="item-name" className={labelCls}>Item name*</label>
@@ -105,9 +112,26 @@ export function ItemFormModal({ item, onClose, onSaved }: { item?: InventoryItem
             </div>
           )}
         </div>
+        <div className="rounded-xl border border-[#e6e1d6] px-4 py-3">
+          <label htmlFor="item-reusable" className={`flex items-start gap-3 ${lockReusable ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+            <input
+              id="item-reusable" type="checkbox" checked={reusable} disabled={lockReusable}
+              onChange={(e) => setReusable(e.target.checked)} aria-describedby="item-reusable-help"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[#0b241e] disabled:opacity-60"
+            />
+            <span>
+              <span className="block text-[15px] font-medium text-dark">Reusable (issued and returned, e.g. linen)</span>
+              <span id="item-reusable-help" className="mt-0.5 block text-sm text-slate-600">
+                {lockReusable
+                  ? `${fmtQty(item?.inUse ?? 0)} ${item?.unit ?? ''} are still in use — return or write them off in Return Items before changing this.`
+                  : 'Record Usage issues it to a department instead of using it up; it goes back to store through Return Items.'}
+              </span>
+            </span>
+          </label>
+        </div>
         <p className="rounded-xl bg-sand px-4 py-3 text-sm text-slate-700">
           {editing
-            ? 'The available quantity can’t be edited here. Record purchases with Add Stock, consumption with Record Usage, and physical corrections with Adjust stock on the item’s page.'
+            ? 'The available quantity can’t be edited here. Record purchases with Add Stock, consumption or issues with Record Usage, returns with Return Items, and physical corrections with Adjust stock on the item’s page.'
             : 'The Item ID is generated automatically. Opening stock is what you have on hand today; after this, stock changes only through purchases, usage and adjustments.'}
         </p>
         <FormError>{formError}</FormError>

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { PackageMinus, Pencil, Plus, SlidersHorizontal } from 'lucide-react'
+import { PackageCheck, PackageMinus, Pencil, Plus, SlidersHorizontal } from 'lucide-react'
 import { can, useAuth } from '../../auth/AuthContext'
 import { useStore } from '../../data/store'
 import { fmtDate, formatINR } from '../../lib/format'
@@ -10,8 +10,8 @@ import { capsLabelCls, cardTitleCls, linkCls, outlineBtnCls, refCardCls, solidBt
 import { ItemFormModal } from '../../components/inventory/ItemFormModal'
 import { AdjustStockModal } from '../../components/inventory/AdjustStockModal'
 import {
-  ActivePill, BillLink, fmtQty, fmtSigned, movementDelta, MovementPill, newestFirst, StockStatusPill, stockValue, SummaryRow,
-  tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls,
+  ActivePill, BillLink, DuePill, fmtQty, fmtSigned, inUseByDepartment, movementDetail, MovementPill, MovementQty, newestFirst,
+  ReusablePill, StockStatusPill, stockValue, SummaryRow, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls,
 } from '../../components/inventory/shared'
 
 const RECENT = 25
@@ -29,19 +29,24 @@ export function StockDetails() {
     () => data.inventory.movements.filter((m) => m.itemId === id).sort(newestFirst),
     [data.inventory.movements, id],
   )
-  const billed = useMemo(
-    () => new Set(data.inventory.purchases.filter((p) => p.billName).map((p) => p.ref)),
-    [data.inventory.purchases],
-  )
+  const purchaseOf = useMemo(() => new Map(data.inventory.purchases.map((p) => [p.ref, p])), [data.inventory.purchases])
   const totals = useMemo(() => {
-    let purchased = 0, used = 0, adjusted = 0
+    let purchased = 0, used = 0, adjusted = 0, issued = 0, returned = 0, writtenOff = 0
     for (const m of movements) {
-      if (m.type === 'in') purchased += Math.abs(m.qty)
-      else if (m.type === 'out') used += Math.abs(m.qty)
+      const q = Math.abs(m.qty)
+      if (m.type === 'in') purchased += q
+      else if (m.type === 'out') used += q
+      else if (m.type === 'issue') issued += q
+      else if (m.type === 'return') returned += q
+      else if (m.type === 'writeoff') writtenOff += q
       else adjusted += m.qty
     }
-    return { purchased, used, adjusted }
+    return { purchased, used, adjusted, issued, returned, writtenOff }
   }, [movements])
+  const byDept = useMemo(
+    () => [...(inUseByDepartment(movements).get(id) ?? new Map<string, number>())].sort((a, b) => b[1] - a[1]),
+    [movements, id],
+  )
 
   if (!item) {
     return (
@@ -61,7 +66,7 @@ export function StockDetails() {
       <PageTitle
         back={{ to: '/inventory', label: 'Back to inventory' }}
         title={item.name}
-        tag={<span className="flex gap-2"><StockStatusPill item={item} />{!item.active && <Pill tone="grey">Inactive</Pill>}</span>}
+        tag={<span className="flex gap-2"><StockStatusPill item={item} />{item.reusable && <ReusablePill />}{!item.active && <Pill tone="grey">Inactive</Pill>}</span>}
         subtitle={`${item.id} · ${item.category}`}
         actions={(
           <>
@@ -70,6 +75,11 @@ export function StockDetails() {
               <Link to={`/inventory/record-usage?item=${enc}`} className={outlineBtnCls}><PackageMinus size={17} aria-hidden /> Record Usage</Link>
             ) : (
               <button type="button" disabled title="Nothing available to issue" className={outlineBtnCls}><PackageMinus size={17} aria-hidden /> Record Usage</button>
+            ))}
+            {canStock && item.reusable && (item.inUse > 0 ? (
+              <Link to={`/inventory/returns?item=${enc}`} className={outlineBtnCls}><PackageCheck size={17} aria-hidden /> Return Items</Link>
+            ) : (
+              <button type="button" disabled title="Nothing in use to return" className={outlineBtnCls}><PackageCheck size={17} aria-hidden /> Return Items</button>
             ))}
             {canMaster && <button type="button" onClick={() => setModal('edit')} className={outlineBtnCls}><Pencil size={16} aria-hidden /> Edit</button>}
             {canStock && <button type="button" onClick={() => setModal('adjust')} className={outlineBtnCls}><SlidersHorizontal size={16} aria-hidden /> Adjust stock</button>}
@@ -89,7 +99,9 @@ export function StockDetails() {
             <Info label="Category">{item.category}</Info>
             <Info label="Unit">{item.unit}</Info>
             <Info label="Minimum stock level">{fmtQty(item.minStock)} {item.unit}</Info>
-            <Info label="Current available quantity"><span className="font-semibold">{fmtQty(item.available)} {item.unit}</span></Info>
+            <Info label={item.reusable ? 'Available in store' : 'Current available quantity'}><span className="font-semibold">{fmtQty(item.available)} {item.unit}</span></Info>
+            {item.reusable && <Info label="In use (issued)"><span className="font-semibold">{fmtQty(item.inUse)} {item.unit}</span></Info>}
+            <Info label="Type">{item.reusable ? 'Reusable — issued and returned' : 'Consumable'}</Info>
             <Info label="Stock status"><StockStatusPill item={item} /></Info>
             <Info label="Item status"><ActivePill active={item.active} /></Info>
           </dl>
@@ -103,18 +115,41 @@ export function StockDetails() {
           <dl className="space-y-3 text-[15px]">
             <SummaryRow label="Opening stock" value={`${fmtQty(item.openingStock)} ${item.unit}`} />
             <SummaryRow label="Total purchased" value={`${fmtSigned(totals.purchased)} ${item.unit}`} />
-            <SummaryRow label="Total used / issued" value={`${fmtSigned(-totals.used)} ${item.unit}`} />
+            {(!item.reusable || totals.used > 0) && (
+              <SummaryRow label={item.reusable ? 'Total used' : 'Total used / issued'} value={`${fmtSigned(-totals.used)} ${item.unit}`} />
+            )}
+            {(item.reusable || totals.issued > 0) && (
+              <>
+                <SummaryRow label="Total issued" value={`${fmtSigned(-totals.issued)} ${item.unit}`} />
+                <SummaryRow label="Total returned" value={`${fmtSigned(totals.returned)} ${item.unit}`} />
+              </>
+            )}
             <SummaryRow label="Total stock adjustments" value={`${fmtSigned(totals.adjusted)} ${item.unit}`} />
             <div className="flex items-center justify-between gap-3 border-t border-[#eeeae1] pt-3">
-              <dt className="font-semibold text-dark">Current available quantity</dt>
+              <dt className="font-semibold text-dark">{item.reusable ? 'Available in store' : 'Current available quantity'}</dt>
               <dd className="nums font-semibold text-dark">{fmtQty(item.available)} {item.unit}</dd>
             </div>
+            {(item.reusable || totals.issued > 0) && (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="font-semibold text-dark">In use</dt>
+                  <dd className="nums font-semibold text-dark">{fmtQty(item.inUse)} {item.unit}</dd>
+                </div>
+                {byDept.length > 0 && (
+                  <div className="-mt-1.5 text-right text-[13px] text-slate-500">
+                    with {byDept.map(([d, q]) => `${d} ${fmtQty(q)}`).join(' · ')}
+                  </div>
+                )}
+                <SummaryRow label="Written off (damaged / lost)" value={`${fmtQty(totals.writtenOff)} ${item.unit}`} />
+              </>
+            )}
           </dl>
           <div className="mt-4 rounded-xl bg-sand px-4 py-3.5">
             <div className={`${capsLabelCls} !mb-1`}>Current stock value</div>
             <div className="nums font-display text-[28px] font-semibold leading-tight text-dark">{formatINR(stockValue(item))}</div>
             <div className="mt-0.5 text-sm text-slate-500">
               {item.lastRate > 0 ? `At the last purchase rate of ${formatINR(item.lastRate)} / ${item.unit}` : 'No purchase rate yet'}
+              {item.lastRate > 0 && item.inUse > 0 && ` · in store + ${fmtQty(item.inUse)} in use`}
             </div>
           </div>
         </section>
@@ -136,13 +171,12 @@ export function StockDetails() {
                   <th scope="col" className={thCls}>Movement type</th>
                   <th scope="col" className={thCls}>Reference ID</th>
                   <th scope="col" className={thNumCls}>Quantity</th>
-                  <th scope="col" className={thNumCls}>Balance</th>
+                  <th scope="col" className={thNumCls}>{item.reusable ? 'Store balance' : 'Balance'}</th>
                 </tr>
               </thead>
               <tbody>
                 {shown.map((m) => {
-                  const d = movementDelta(m)
-                  const detail = m.type === 'out' ? m.department : m.type === 'in' ? m.supplier : m.note
+                  const detail = movementDetail(m)
                   return (
                     <tr key={m.id} className={trCls}>
                       <td className={`${tdCls} nums whitespace-nowrap`}>{fmtDate(m.date)}</td>
@@ -153,10 +187,11 @@ export function StockDetails() {
                       <td className={tdCls}>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                           <Link to={`/inventory/history?q=${encodeURIComponent(m.ref)}`} className={`${linkCls} nums`}>{m.ref}</Link>
-                          {m.type === 'in' && billed.has(m.ref) && <BillLink purchaseRef={m.ref} />}
+                          {m.type === 'in' && purchaseOf.get(m.ref)?.billName && <BillLink purchaseRef={m.ref} />}
+                          {m.type === 'in' && <DuePill purchase={purchaseOf.get(m.ref)} />}
                         </div>
                       </td>
-                      <td className={`${tdNumCls} font-semibold ${d > 0 ? 'text-ok' : d < 0 ? 'text-red-700' : ''}`}>{fmtSigned(d)}</td>
+                      <td className={`${tdNumCls} whitespace-nowrap font-semibold`}><MovementQty m={m} /></td>
                       <td className={tdNumCls}>{fmtQty(m.balance)}</td>
                     </tr>
                   )
@@ -175,7 +210,9 @@ export function StockDetails() {
           </div>
         </div>
         {movements.length === 0 && (
-          <p className="mt-3 text-sm text-slate-500">No purchases, usage or adjustments recorded for this item yet.</p>
+          <p className="mt-3 text-sm text-slate-500">
+            {item.reusable ? 'No purchases, issues, returns or adjustments recorded for this item yet.' : 'No purchases, usage or adjustments recorded for this item yet.'}
+          </p>
         )}
       </section>
 

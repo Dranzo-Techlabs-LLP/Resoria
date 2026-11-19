@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { History, PackageMinus, Plus, Search } from 'lucide-react'
+import { History, PackageCheck, PackageMinus, Plus, Search } from 'lucide-react'
 import { can, useAuth } from '../../auth/AuthContext'
 import { useStore } from '../../data/store'
 import { formatINR } from '../../lib/format'
@@ -10,8 +10,9 @@ import { KpiCard } from '../../components/ui/KpiCard'
 import { Pill } from '../../components/ui/Pill'
 import { fieldCls, linkCls, outlineBtnCls, solidBtnCls } from '../../components/styles'
 import { ItemFormModal } from '../../components/inventory/ItemFormModal'
+import { SupplierDues } from '../../components/inventory/SupplierDues'
 import {
-  fmtQty, rowBtnCls, SortTh, stockStatus, StockStatusPill, stockValue, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls,
+  fmtQty, ReusablePill, rowBtnCls, SortTh, stockStatus, StockStatusPill, stockValue, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls,
   withCurrent, type SortDir, type StockStatus,
 } from '../../components/inventory/shared'
 
@@ -37,8 +38,8 @@ export function InventoryOverview() {
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'name', dir: 'asc' })
   const [editing, setEditing] = useState<InventoryItem | null>(null)
 
-  // Active items, plus deactivated items that still hold stock (shown greyed)
-  const listed = useMemo(() => data.inventory.items.filter((i) => i.active || i.available > 0), [data.inventory.items])
+  // Active items, plus deactivated items that still hold stock or have pieces in use (shown greyed)
+  const listed = useMemo(() => data.inventory.items.filter((i) => i.active || i.available > 0 || i.inUse > 0), [data.inventory.items])
   const categories = useMemo(
     () => listed.reduce<string[]>((list, i) => withCurrent(list, i.category), [...INVENTORY_CATEGORIES]),
     [listed],
@@ -49,6 +50,7 @@ export function InventoryOverview() {
     low: listed.filter((i) => stockStatus(i) === 'low').length,
     out: listed.filter((i) => stockStatus(i) === 'out').length,
     value: listed.reduce((s, i) => s + stockValue(i), 0),
+    inUse: listed.some((i) => i.inUse > 0),
   }), [listed])
 
   const rows = useMemo(() => {
@@ -79,6 +81,7 @@ export function InventoryOverview() {
           <>
             <Link to="/inventory/history" className={outlineBtnCls}><History size={17} aria-hidden /> Stock History</Link>
             {canStock && <Link to="/inventory/record-usage" className={outlineBtnCls}><PackageMinus size={17} aria-hidden /> Record Usage</Link>}
+            {canStock && <Link to="/inventory/returns" className={outlineBtnCls}><PackageCheck size={17} aria-hidden /> Return Items</Link>}
             {canStock && <Link to="/inventory/add-stock" className={solidBtnCls}><Plus size={17} aria-hidden /> Add Stock</Link>}
           </>
         )}
@@ -89,8 +92,10 @@ export function InventoryOverview() {
         <KpiCard label="Total stock items" value={kpi.total} sub="Registered items" onClick={() => setStatus('all')} />
         <KpiCard label="Low stock" value={kpi.low} sub="At or below minimum" tone={kpi.low ? 'due' : 'ink'} onClick={() => setStatus('low')} />
         <KpiCard label="Out of stock" value={kpi.out} sub="Zero available" tone={kpi.out ? 'due' : 'ink'} onClick={() => setStatus('out')} />
-        <KpiCard label="Stock value" value={formatINR(kpi.value)} sub="At last purchase rate" />
+        <KpiCard label="Stock value" value={formatINR(kpi.value)} sub={kpi.inUse ? 'In store + in use, at last purchase rate' : 'At last purchase rate'} />
       </div>
+
+      <SupplierDues purchases={data.inventory.purchases} canPay={canStock} />
 
       <div className="mb-4 flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1">
@@ -126,12 +131,13 @@ export function InventoryOverview() {
 
       <div className={tableWrapCls}>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[860px] border-collapse">
+          <table className="w-full min-w-[940px] border-collapse">
             <thead>
               <tr>
                 <SortTh label="Item name" k="name" sort={sort} onSort={onSort} />
                 <SortTh label="Category" k="category" sort={sort} onSort={onSort} />
                 <SortTh label="Available qty" k="qty" sort={sort} onSort={onSort} numeric />
+                <th scope="col" className={thNumCls}>In use</th>
                 <th scope="col" className={thCls}>Unit</th>
                 <th scope="col" className={thNumCls}>Min stock</th>
                 <th scope="col" className={thCls}>Status</th>
@@ -156,12 +162,14 @@ export function InventoryOverview() {
                         >
                           {i.name}
                         </Link>
+                        {i.reusable && <ReusablePill />}
                         {!i.active && <Pill tone="grey">Inactive</Pill>}
                       </div>
                       <div className="mt-0.5 text-[13px] text-slate-500">{i.id}</div>
                     </td>
                     <td className={tdCls}>{i.category}</td>
                     <td className={`${tdNumCls} font-semibold ${st === 'out' ? 'text-red-700' : st === 'low' ? 'text-due' : ''}`}>{fmtQty(i.available)}</td>
+                    <td className={i.reusable ? tdNumCls : `${tdNumCls} !text-slate-400`}>{i.reusable ? fmtQty(i.inUse) : '—'}</td>
                     <td className={tdCls}>{i.unit}</td>
                     <td className={tdNumCls}>{fmtQty(i.minStock)}</td>
                     <td className={tdCls}><StockStatusPill item={i} /></td>
@@ -177,7 +185,7 @@ export function InventoryOverview() {
               })}
               {rows.length === 0 && (
                 <tr className={trCls}>
-                  <td colSpan={7} className="px-4 py-14 text-center text-[15px] text-slate-500">
+                  <td colSpan={8} className="px-4 py-14 text-center text-[15px] text-slate-500">
                     {loading && !listed.length ? 'Loading stock…'
                       : filtered ? (
                         <>No items match these filters. <button type="button" onClick={clearFilters} className={linkCls}>Clear filters</button></>
@@ -198,7 +206,8 @@ export function InventoryOverview() {
       </div>
       {rows.length > 0 && (
         <p className="mt-3 text-sm text-slate-500">
-          {rows.length} {rows.length === 1 ? 'item' : 'items'} · stock updates automatically after every Stock In, Stock Out and Adjustment.
+          {rows.length} {rows.length === 1 ? 'item' : 'items'} · Available = in the store; In use = reusable items issued to a department and not yet returned.
+          Stock updates automatically after every Stock In, Stock Out, Issue, Return and Adjustment.
         </p>
       )}
 

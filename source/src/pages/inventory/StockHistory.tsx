@@ -8,13 +8,15 @@ import { PageTitle } from '../../components/ui/PageTitle'
 import { ChoiceChips } from '../../components/ui/Chips'
 import { fieldCls, labelCls, linkCls } from '../../components/styles'
 import {
-  BillLink, fmtQty, fmtSigned, movementDelta, MovementPill, newestFirst, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls, trCls,
-  withCurrent,
+  BillLink, DuePill, fmtQty, movementDetail, MovementPill, MovementQty, newestFirst, tableWrapCls, tdCls, tdNumCls, thCls, thNumCls,
+  trCls, withCurrent,
 } from '../../components/inventory/shared'
 
-const TYPE_OPTIONS = ['All', 'Stock In', 'Stock Out', 'Adjustment'] as const
+const TYPE_OPTIONS = ['All', 'Stock In', 'Stock Out', 'Issue', 'Return', 'Write-off', 'Adjustment'] as const
 type TypeOption = (typeof TYPE_OPTIONS)[number]
-const TYPE_OF: Record<Exclude<TypeOption, 'All'>, MovementType> = { 'Stock In': 'in', 'Stock Out': 'out', Adjustment: 'adjust' }
+const TYPE_OF: Record<Exclude<TypeOption, 'All'>, MovementType> = {
+  'Stock In': 'in', 'Stock Out': 'out', Issue: 'issue', Return: 'return', 'Write-off': 'writeoff', Adjustment: 'adjust',
+}
 
 export function StockHistory() {
   const { data, loading } = useStore()
@@ -32,7 +34,7 @@ export function StockHistory() {
 
   const { items, movements, purchases } = data.inventory
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
-  const billed = useMemo(() => new Set(purchases.filter((p) => p.billName).map((p) => p.ref)), [purchases])
+  const purchaseOf = useMemo(() => new Map(purchases.map((p) => [p.ref, p])), [purchases])
   const categories = useMemo(() => items.reduce<string[]>((l, i) => withCurrent(l, i.category), [...INVENTORY_CATEGORIES]), [items])
   const departments = useMemo(
     () => movements.reduce<string[]>((l, m) => (m.department ? withCurrent(l, m.department) : l), [...data.settings.departments]),
@@ -64,7 +66,7 @@ export function StockHistory() {
       <PageTitle
         back={{ to: '/inventory', label: 'Back to inventory' }}
         title="Stock History"
-        subtitle="Every purchase, usage and stock adjustment, newest first"
+        subtitle="Every purchase, usage, issue, return and stock adjustment, newest first"
       />
 
       <div className="mb-4 space-y-3">
@@ -129,8 +131,7 @@ export function StockHistory() {
             <tbody>
               {rows.map((m) => {
                 const it = byId.get(m.itemId)
-                const d = movementDelta(m)
-                const detail = m.type === 'out' ? m.department : m.type === 'in' ? m.supplier : m.note
+                const detail = movementDetail(m)
                 return (
                   <tr key={m.id} className={trCls}>
                     <td className={`${tdCls} nums whitespace-nowrap`}>{fmtDate(m.date)}</td>
@@ -142,7 +143,8 @@ export function StockHistory() {
                         >
                           {m.ref}
                         </button>
-                        {m.type === 'in' && billed.has(m.ref) && <BillLink purchaseRef={m.ref} />}
+                        {m.type === 'in' && purchaseOf.get(m.ref)?.billName && <BillLink purchaseRef={m.ref} />}
+                        {m.type === 'in' && <DuePill purchase={purchaseOf.get(m.ref)} />}
                       </div>
                     </td>
                     <td className={tdCls}>
@@ -156,7 +158,7 @@ export function StockHistory() {
                       <MovementPill type={m.type} />
                       {detail && <div className="mt-1 max-w-[220px] truncate text-[13px] text-slate-500" title={detail}>{detail}</div>}
                     </td>
-                    <td className={`${tdNumCls} font-semibold ${d > 0 ? 'text-ok' : d < 0 ? 'text-red-700' : ''}`}>{fmtSigned(d)}</td>
+                    <td className={`${tdNumCls} whitespace-nowrap font-semibold`}><MovementQty m={m} /></td>
                     <td className={tdNumCls}>{fmtQty(m.prevBalance)}</td>
                     <td className={`${tdNumCls} font-semibold`}>{fmtQty(m.balance)}</td>
                   </tr>
@@ -166,7 +168,7 @@ export function StockHistory() {
                 <tr className={trCls}>
                   <td colSpan={8} className="px-4 py-14 text-center text-[15px] text-slate-500">
                     {loading && !movements.length ? 'Loading stock history…'
-                      : movements.length === 0 ? 'No stock movements yet. Purchases, usage and adjustments will appear here.'
+                      : movements.length === 0 ? 'No stock movements yet. Purchases, usage, issues, returns and adjustments will appear here.'
                       : <>No movements match these filters. <button type="button" onClick={clear} className={linkCls}>Clear filters</button></>}
                   </td>
                 </tr>
@@ -175,6 +177,12 @@ export function StockHistory() {
           </table>
         </div>
       </div>
+      {rows.some((m) => m.type === 'issue' || m.type === 'return' || m.type === 'writeoff') && (
+        <p className="mt-3 text-sm text-slate-500">
+          Balances are store quantities. Issues take reusable items out of the store, returns bring them back, and a write-off
+          removes damaged or lost pieces from the in-use count without changing the store.
+        </p>
+      )}
     </>
   )
 }

@@ -6,6 +6,7 @@ import { roomsByCategory, type RoomConfig } from '../lib/config'
 import { formatINR } from '../lib/format'
 import { fieldAreaCls, fieldCls, labelCls, outlineBtnCls, refCardCls, solidBtnCls } from '../components/styles'
 import { ErrorNote, SavedTag, plural } from '../components/config/kit'
+import { LegacyRooms } from '../components/config/LegacyRooms'
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -129,6 +130,7 @@ export function RoomsSettings() {
   const canEdit = can(user, 'edit_villas')
   return (
     <div className="space-y-7">
+      <LegacyRooms />
       <p className="text-[15px] text-slate-600">
         The base rate is the nightly price used to work out the room amount on a new booking.
         {!canEdit && ' You have read-only access to room settings.'}

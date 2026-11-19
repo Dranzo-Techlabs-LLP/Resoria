@@ -11,7 +11,7 @@ import { can, useAuth } from '../../auth/AuthContext'
 import { useStore } from '../../data/store'
 import { PaymentTypeTag, Pill } from '../ui/Pill'
 import { linkCls, refCardCls, solidBtnCls } from '../styles'
-import { chargesInOrder, commissionInfo, datePart, ledgerOrder, tdCls, thCls, timePart } from './helpers'
+import { chargesInOrder, commissionInfo, datePart, receiptsOf, tdCls, thCls, timePart } from './helpers'
 import { Dash, DetailCard, Info } from './parts'
 import type { Booking, BookingCharge } from '../../types'
 
@@ -294,7 +294,7 @@ export function NotesCard({ notes }: { notes: string }) {
 // ---- Bills & payment ledger -------------------------------------------------
 
 export function LedgerCard({ booking: b, showDownloadAll, showDue }: { booking: Booking; showDownloadAll: boolean; showDue: boolean }) {
-  const rows = ledgerOrder(b)
+  const rows = receiptsOf(b)
   const due = chargesDue(b)
   const billsTo = `/bookings/${enc(b.ref)}/bills`
   return (
@@ -315,7 +315,7 @@ export function LedgerCard({ booking: b, showDownloadAll, showDue }: { booking: 
             </tr>
           </thead>
           <tbody>
-            {rows.map((p) => {
+            {rows.map(({ p, no }) => {
               const refund = p.kind === 'refund'
               return (
                 <tr key={p.id} className="border-t border-[#efece4]">
@@ -326,7 +326,8 @@ export function LedgerCard({ booking: b, showDownloadAll, showDue }: { booking: 
                     {refund ? '−' : '+'}{formatINR(p.amount)}
                   </td>
                   <td className={`${tdCls} text-right`}>
-                    <Link to={`${billsTo}?payment=${enc(p.id)}`} className={`${linkCls} whitespace-nowrap text-sm`}>Download Bill</Link>
+                    <Link to={`${billsTo}?payment=${enc(p.id)}`} className={`${linkCls} whitespace-nowrap text-sm`} aria-label={`Download bill ${no}`}>Download Bill</Link>
+                    <div className="nums mt-0.5 whitespace-nowrap text-xs text-slate-500">{no}</div>
                   </td>
                 </tr>
               )

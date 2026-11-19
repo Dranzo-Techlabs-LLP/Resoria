@@ -5,17 +5,20 @@ import { fieldCls } from '../styles'
 import { fmtQty } from './shared'
 
 /**
- * Searchable item select (Add Stock / Record Usage). Only the items passed in can be picked;
- * `disabledReason` greys an option out (already on another line, nothing available…).
+ * Searchable item select (Add Stock / Record Usage / Return Items). Only the items passed in can be
+ * picked; `disabledReason` greys an option out (already on another line, nothing available…);
+ * `detail` replaces the quantity shown on the right ("12 Pcs" by default, "in use: 8" for returns).
  */
 export function ItemCombobox({
-  id, items, value, onChange, disabledReason, invalid, describedBy,
+  id, items, value, onChange, disabledReason, detail, emptyText = 'No active items yet.', invalid, describedBy,
 }: {
   id: string
   items: InventoryItem[]
   value: string
   onChange: (itemId: string) => void
   disabledReason?: (i: InventoryItem) => string | undefined
+  detail?: (i: InventoryItem) => string
+  emptyText?: string
   invalid?: boolean
   describedBy?: string
 }) {
@@ -108,7 +111,7 @@ export function ItemCombobox({
           className="absolute top-[calc(100%+6px)] right-0 left-0 z-30 max-h-72 overflow-y-auto rounded-2xl border border-[#e6e1d6] bg-white py-1.5 shadow-xl"
         >
           {matches.length === 0 && (
-            <li className="px-4 py-3 text-sm text-slate-500">{items.length ? `No active item matches “${text.trim()}”.` : 'No active items yet.'}</li>
+            <li className="px-4 py-3 text-sm text-slate-500">{items.length ? `No item matches “${text.trim()}”.` : emptyText}</li>
           )}
           {matches.map((i, idx) => {
             const reason = disabledReason?.(i)
@@ -129,7 +132,7 @@ export function ItemCombobox({
                   <span className="block truncate text-[13px] text-slate-500">{i.id} · {i.category}</span>
                 </span>
                 <span className="nums shrink-0 text-right text-[13px] text-slate-500">
-                  {reason ?? `${fmtQty(i.available)} ${i.unit}`}
+                  {reason ?? (detail ? detail(i) : `${fmtQty(i.available)} ${i.unit}`)}
                 </span>
               </li>
             )

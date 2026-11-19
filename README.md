@@ -85,5 +85,24 @@ WHM terminal.
 
 - Contact details for the website and invoices: `source/website/src/lib/content.ts`
   and `source/src/lib/config.ts` (items marked `PLACEHOLDER` or `TODO`).
-- Invoice terms: in the admin under **Invoice settings**.
+- Invoice terms: in the admin under **Configuration → Invoice**.
 - Enquiry email: `ENQUIRY_TO_EMAIL` in the server's `api/config.php`.
+
+## Before going live: Configuration
+
+Set these up once in the admin under **Configuration** (each tab saves on its own):
+
+| Tab | Why |
+| --- | --- |
+| Rooms | Nightly base rate per room: New booking works the total out from it. If older bookings still name rooms from the previous room list (K1, Cave Room…), a "Rooms from the older room list" card appears here; move each to a current room. |
+| B2B agents | Agents and their commission (percent or flat). B2B bookings need an agent; the commission is saved as pending and paid from **Expenses → B2B Payment**. |
+| OTA platforms | Booking.com, Agoda… (starts with the usual ones). |
+| Management referrals | Who may refer (and discount or comp) a booking. |
+| Restaurant menu | Items and prices for **Add expense → Food** on in-house bookings. |
+| Conference Hall | Price per duration for **Add expense → Conference Hall**. |
+| Inventory master | Stock items; tick **Reusable** for linen, which is issued and returned instead of used up. |
+| Departments | Who stock is issued to (Housekeeping, Kitchen…). |
+
+Guest ratings: from a completed stay, **Share → Feedback request on WhatsApp** sends the guest a
+link to `/feedback` on the website; their rating lands under **Rating**, where staff can also add
+reviews from Google or OTAs and record replies.

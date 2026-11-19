@@ -283,7 +283,9 @@ function booking_shape(array $b, array $payments, array $charges = [], array $ev
       'advance' => (int)($p['is_advance'] ?? 0) === 1,
       'purpose' => ($p['purpose'] ?? 'room') === 'extras' ? 'extras' : 'room',
       'createdAt' => $p['created_at'] ?? '',
+      'receiptNo' => $p['receipt_no'] ?? '',
     ], $payments),
+    'feedbackToken'      => $b['feedback_token'] ?? '',
     // change-sheet fields (null / '' on older rows)
     'place'              => $b['place'] ?? '',
     'documentName'       => $b['document_name'] ?? '',
@@ -309,6 +311,7 @@ function get_booking(string $ref): ?array {
   $b = $st->fetch();
   if (!$b) return null;
   $ref = $b['ref'];
+  assign_receipts($ref); // payments recorded on any path get their fixed receipt number
   $q = function (string $sql) use ($ref) {
     $st = db()->prepare($sql);
     $st->execute([$ref]);
@@ -364,6 +367,7 @@ function bootstrap_payload(): array {
     'villaOverrides' => (object)$overrides,   // force {} not [] when empty
     'settings'      => settings_payload(),
     'inventory'     => inventory_payload(),
+    'ratings'       => array_map('Weland\\rating_shape', $pdo->query('SELECT * FROM ratings ORDER BY date DESC, created_at DESC')->fetchAll()),
   ];
 }
 
@@ -373,7 +377,7 @@ function bootstrap_payload(): array {
 // ==================================================================
 
 /** Bump when ensure_schema() gains steps. */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function column_exists(string $table, string $col): bool {
   $st = db()->prepare('SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
@@ -517,8 +521,74 @@ function ensure_schema(bool $force = false): void {
     $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('rights_v2', '1')")->execute();
   }
 
+  // ---- v5: guest ratings, feedback links, reusable linen, supplier payments, fixed receipt numbers ----
+  $pdo->exec("CREATE TABLE IF NOT EXISTS ratings (
+    id VARCHAR(32) PRIMARY KEY,
+    booking_ref VARCHAR(40) NULL,
+    guest VARCHAR(160) NOT NULL,
+    overall TINYINT NOT NULL,
+    aspects VARCHAR(255) NOT NULL DEFAULT '{}',
+    comment TEXT NULL,
+    source VARCHAR(40) NOT NULL,
+    date DATE NOT NULL,
+    created_at DATETIME NOT NULL,
+    response TEXT NULL,
+    responded_at DATETIME NULL,
+    INDEX (booking_ref), INDEX (date)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS purchase_payments (
+    seq INT NOT NULL AUTO_INCREMENT UNIQUE,
+    id VARCHAR(32) PRIMARY KEY,
+    ref VARCHAR(20) NOT NULL,
+    date DATE NOT NULL,
+    amount INT NOT NULL,
+    method VARCHAR(20) NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    INDEX (ref)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  add_column('bookings', 'feedback_token', 'VARCHAR(40) NULL UNIQUE');
+  add_column('inventory_items', 'reusable', 'TINYINT(1) NOT NULL DEFAULT 0');
+  add_column('payments', 'receipt_no', 'VARCHAR(60) NULL');
+  foreach ($pdo->query('SELECT DISTINCT booking_ref FROM payments WHERE receipt_no IS NULL')->fetchAll() as $r) {
+    assign_receipts($r['booking_ref']);
+  }
+  $marker = $pdo->query("SELECT v FROM app_settings WHERE k = 'rights_v3'")->fetchColumn();
+  if ($marker === false) {
+    $grant = [
+      'Administrator' => ['view_ratings', 'manage_ratings'],
+      'Manager'       => ['view_ratings', 'manage_ratings'],
+      'Front Desk'    => ['view_ratings', 'manage_ratings'],
+      'Owner'         => ['view_ratings'],
+    ];
+    foreach ($grant as $role => $add) {
+      $st = $pdo->prepare('SELECT id, rights FROM roles WHERE name = ?');
+      $st->execute([$role]);
+      $r = $st->fetch();
+      if (!$r) continue;
+      $rights = array_values(array_unique(array_merge(json_decode($r['rights'], true) ?: [], $add)));
+      $pdo->prepare('UPDATE roles SET rights = ? WHERE id = ?')->execute([json_encode($rights), $r['id']]);
+    }
+    $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('rights_v3', '1')")->execute();
+  }
+
   $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")
       ->execute([(string)SCHEMA_VERSION]);
+}
+
+/** Gives every payment of a booking without a receipt number the next one (<ref>-R<n>), in ledger order. */
+function assign_receipts(string $ref): void {
+  $pdo = db();
+  $st = $pdo->prepare('SELECT id, receipt_no FROM payments WHERE booking_ref = ? ORDER BY date ASC, seq ASC');
+  $st->execute([$ref]);
+  $rows = $st->fetchAll();
+  $max = 0;
+  foreach ($rows as $r) {
+    if ($r['receipt_no'] && preg_match('/-R(\d+)$/', $r['receipt_no'], $m)) $max = max($max, (int)$m[1]);
+  }
+  $upd = $pdo->prepare('UPDATE payments SET receipt_no = ? WHERE id = ?');
+  foreach ($rows as $r) {
+    if (!$r['receipt_no']) $upd->execute([$ref . '-R' . (++$max), $r['id']]);
+  }
 }
 
 // ---------------- Formatting ----------------
@@ -716,6 +786,10 @@ function f2($v): float {
 function inventory_payload(): array {
   $pdo = db();
   $items = $pdo->query('SELECT * FROM inventory_items ORDER BY name ASC')->fetchAll();
+  $payBy = [];
+  foreach ($pdo->query('SELECT * FROM purchase_payments ORDER BY date ASC, seq ASC')->fetchAll() as $pp) {
+    $payBy[$pp['ref']][] = ['date' => $pp['date'], 'amount' => (int)$pp['amount'], 'method' => $pp['method'], 'createdAt' => $pp['created_at']];
+  }
   $moves = $pdo->query('SELECT * FROM stock_movements ORDER BY date DESC, seq DESC')->fetchAll();
   $sum = [];
   $lastRate = [];
@@ -723,12 +797,15 @@ function inventory_payload(): array {
   foreach ($items as $i) $opening[$i['id']] = f2($i['opening_stock']);
   // Running balances in date order (oldest first), so a back-dated entry reads correctly in the history
   $chrono = array_reverse($moves);
+  $inUse = [];
   foreach ($chrono as $k => $m) {
     $q = f2($m['qty']);
+    $d = store_delta($m['type'], $q);
     $prev = f2(($opening[$m['item_id']] ?? 0) + ($sum[$m['item_id']] ?? 0));
-    $sum[$m['item_id']] = ($sum[$m['item_id']] ?? 0) + ($m['type'] === 'out' ? -$q : $q);
+    $sum[$m['item_id']] = ($sum[$m['item_id']] ?? 0) + $d;
+    $inUse[$m['item_id']] = ($inUse[$m['item_id']] ?? 0) + use_delta($m['type'], $q);
     $chrono[$k]['prev_balance'] = $prev;
-    $chrono[$k]['balance'] = f2($prev + ($m['type'] === 'out' ? -$q : $q));
+    $chrono[$k]['balance'] = f2($prev + $d);
     if ($m['type'] === 'in' && $m['rate'] !== null) $lastRate[$m['item_id']] = f2($m['rate']); // the last purchase rate wins
   }
   $moves = array_reverse($chrono);
@@ -738,6 +815,7 @@ function inventory_payload(): array {
       'minStock' => f2($i['min_stock']), 'openingStock' => f2($i['opening_stock']),
       'available' => f2(f2($i['opening_stock']) + ($sum[$i['id']] ?? 0)),
       'lastRate' => $lastRate[$i['id']] ?? 0, 'active' => (int)$i['active'] === 1, 'createdAt' => $i['created_at'],
+      'reusable' => (int)($i['reusable'] ?? 0) === 1, 'inUse' => f2($inUse[$i['id']] ?? 0),
     ], $items),
     'movements' => array_map(fn($m) => [
       'id' => $m['id'], 'ref' => $m['ref'], 'itemId' => $m['item_id'], 'type' => $m['type'], 'qty' => f2($m['qty']),
@@ -749,6 +827,7 @@ function inventory_payload(): array {
       'ref' => $p['ref'], 'date' => $p['date'], 'supplier' => $p['supplier'], 'billName' => $p['bill_name'] ?? '',
       'total' => (int)$p['total'], 'paidAmount' => (int)$p['paid_amount'], 'paymentStatus' => $p['payment_status'],
       'expenseId' => $p['expense_id'] ?? null,
+      'payments' => $payBy[$p['ref']] ?? [],
     ], $pdo->query('SELECT * FROM stock_purchases ORDER BY date DESC, ref DESC')->fetchAll()),
   ];
 }
@@ -759,15 +838,29 @@ function lock_item(string $id): array {
   $st->execute([$id]);
   $i = $st->fetch();
   if (!$i) fail('Inventory item not found.', 404);
-  $m = db()->prepare("SELECT COALESCE(SUM(CASE WHEN type = 'out' THEN -qty ELSE qty END), 0) FROM stock_movements WHERE item_id = ?");
+  $m = db()->prepare("SELECT
+      COALESCE(SUM(CASE type WHEN 'out' THEN -qty WHEN 'issue' THEN -qty WHEN 'writeoff' THEN 0 ELSE qty END), 0) AS store,
+      COALESCE(SUM(CASE type WHEN 'issue' THEN qty WHEN 'return' THEN -qty WHEN 'writeoff' THEN -qty ELSE 0 END), 0) AS in_use
+    FROM stock_movements WHERE item_id = ?");
   $m->execute([$id]);
-  $i['available'] = f2(f2($i['opening_stock']) + f2($m->fetchColumn()));
+  $t = $m->fetch();
+  $i['available'] = f2(f2($i['opening_stock']) + f2($t['store']));
+  $i['in_use'] = f2($t['in_use']);
   return $i;
+}
+
+/** Change in store quantity for a movement. */
+function store_delta(string $type, float $q): float {
+  return match ($type) { 'out', 'issue' => -$q, 'writeoff' => 0.0, default => $q };
+}
+/** Change in "in use" (issued reusable items) for a movement. */
+function use_delta(string $type, float $q): float {
+  return match ($type) { 'issue' => $q, 'return', 'writeoff' => -$q, default => 0.0 };
 }
 
 function add_movement(array $item, string $ref, string $type, float $qty, array $extra = []): float {
   $prev = $item['available'];
-  $bal = f2($prev + ($type === 'out' ? -$qty : $qty));
+  $bal = f2($prev + store_delta($type, $qty));
   db()->prepare('INSERT INTO stock_movements (id, ref, item_id, type, qty, rate, amount, date, department, supplier, note, prev_balance, balance, created_at)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
       ->execute([gen_id('m'), $ref, $item['id'], $type, $qty, $extra['rate'] ?? null, $extra['amount'] ?? null, $extra['date'],
@@ -805,4 +898,51 @@ function assert_rooms_free(string $villa, string $in, string $out, ?string $exce
     $clash = array_values(array_intersect($want, villa_rooms($o['villa'])));
     if ($clash) fail("{$clash[0]} is already booked by {$o['guest']} ({$o['ref']}) from {$o['check_in']} to {$o['check_out']}.", 409);
   }
+}
+
+// ---------------- Guest ratings ----------------
+
+const RATING_ASPECT_KEYS = ['rooms', 'cleanliness', 'food', 'service', 'value'];
+
+function rating_shape(array $r): array {
+  return [
+    'id' => $r['id'], 'bookingRef' => $r['booking_ref'] ?? null, 'guest' => $r['guest'], 'overall' => (int)$r['overall'],
+    'aspects' => (object)(json_decode($r['aspects'] ?: '{}', true) ?: []), 'comment' => $r['comment'] ?? '',
+    'source' => $r['source'], 'date' => $r['date'], 'createdAt' => $r['created_at'],
+    'response' => $r['response'] ?? '', 'respondedAt' => $r['responded_at'] ?? '',
+  ];
+}
+
+function stars($v, string $what = 'rating'): int {
+  if (!is_numeric($v) || (int)$v != $v || (int)$v < 1 || (int)$v > 5) fail("Give the $what from 1 to 5 stars.");
+  return (int)$v;
+}
+
+/** {rooms: 4, …} with only known aspects rated 1–5. */
+function clean_aspects($a): array {
+  $out = [];
+  if (!is_array($a)) return $out;
+  foreach (RATING_ASPECT_KEYS as $k) {
+    if (isset($a[$k]) && $a[$k] !== null && $a[$k] !== '' && $a[$k] !== 0) $out[$k] = stars($a[$k], $k);
+  }
+  return $out;
+}
+
+function get_rating(string $id): array {
+  $st = db()->prepare('SELECT * FROM ratings WHERE id = ?');
+  $st->execute([$id]);
+  return rating_shape($st->fetch() ?: fail('Rating not found.', 404));
+}
+
+// ---------------- Room renames (old room list → current rooms) ----------------
+
+/** Replaces one room in a comma list ("K1, S2" → "S1, S2"), keeping order and dropping duplicates. */
+function swap_room(string $list, string $from, string $to): string {
+  $rooms = array_map('trim', explode(',', $list));
+  $out = [];
+  foreach ($rooms as $r) {
+    $r = $r === $from ? $to : $r;
+    if ($r !== '' && !in_array($r, $out, true)) $out[] = $r;
+  }
+  return implode(', ', $out);
 }

@@ -6,6 +6,7 @@ import { useStore } from '../../data/store'
 import { fmtDate, TODAY_ISO } from '../../lib/format'
 import type { InventoryItem } from '../../types'
 import { PageTitle } from '../../components/ui/PageTitle'
+import { Pill } from '../../components/ui/Pill'
 import { useToast } from '../../components/ui/Toast'
 import {
   bigPrimaryBtnCls, capsLabelCls, cardTitleCls, fieldAreaCls, fieldCls, labelCls, linkCls, outlineBtnCls, refCardCls,
@@ -86,7 +87,10 @@ export function RecordUsage() {
         note: note.trim() || undefined,
         lines: lines.map((l) => ({ itemId: l.itemId, qty: num(l.qty) })),
       })
-      toast.show('Usage recorded', `${ref} · ${lines.length} ${lines.length === 1 ? 'item' : 'items'} issued to ${department}`)
+      const issued = lines.filter((l) => byId.get(l.itemId)?.reusable).length
+      const used = lines.length - issued
+      const parts = [used && `${used} ${used === 1 ? 'item' : 'items'} used`, issued && `${issued} ${issued === 1 ? 'item' : 'items'} issued`].filter(Boolean)
+      toast.show(used ? 'Usage recorded' : 'Items issued', `${ref} · ${parts.join(', ')} · ${department}`)
       navigate(presetItem ? `/inventory/items/${encodeURIComponent(presetItem.id)}` : '/inventory')
     } catch (err) {
       setFormError(errMsg(err))
@@ -101,6 +105,7 @@ export function RecordUsage() {
     ? { to: `/inventory/items/${encodeURIComponent(presetItem.id)}`, label: `Back to ${presetItem.name}` }
     : { to: '/inventory', label: 'Back to inventory' }
   const chosen = lines.filter((l) => l.itemId)
+  const anyReusable = chosen.some((l) => byId.get(l.itemId)?.reusable)
 
   return (
     <>
@@ -156,10 +161,14 @@ export function RecordUsage() {
                 const remaining = it ? it.available - (Number.isFinite(q) && q > 0 ? q : 0) : undefined
                 const over = overLimit(l, it)
                 const qtyErr = fe(`${l.key}-qty`) || over
+                const issue = !!it?.reusable
                 return (
                   <div key={l.key} className="rounded-xl border border-[#e6e1d6] p-4">
                     <div className="mb-3 flex items-center justify-between">
-                      <span className={`${capsLabelCls} !mb-0`}>Item {idx + 1}</span>
+                      <span className="flex items-center gap-2">
+                        <span className={`${capsLabelCls} !mb-0`}>Item {idx + 1}</span>
+                        {issue && <Pill tone="blue">Issue</Pill>}
+                      </span>
                       {lines.length > 1 && (
                         <button type="button" onClick={() => removeLine(l.key)} className="inline-flex items-center gap-1 text-sm text-slate-600 hover:text-red-700" aria-label={`Remove item ${idx + 1}`}>
                           <X size={15} aria-hidden /> Remove
@@ -182,7 +191,7 @@ export function RecordUsage() {
                       <AutoField label="Available qty" value={it ? fmtQty(it.available) : undefined} />
                       <AutoField label="Unit" value={it?.unit} />
                       <div>
-                        <label htmlFor={`line-${l.key}-qty`} className={labelCls}>Quantity used / issued*</label>
+                        <label htmlFor={`line-${l.key}-qty`} className={labelCls}>{issue ? 'Quantity to issue*' : 'Quantity used / issued*'}</label>
                         <input
                           id={`line-${l.key}-qty`} type="number" min={0} max={it?.available} step="any" inputMode="decimal" className={fieldCls}
                           value={l.qty} onChange={(e) => setLine(l.key, { qty: e.target.value })} placeholder="0"
@@ -196,6 +205,11 @@ export function RecordUsage() {
                       />
                     </div>
                     <FieldError id={`err-${l.key}-qty`}>{qtyErr}</FieldError>
+                    {issue && it && (
+                      <p className="mt-2 text-[13px] text-slate-500">
+                        Reusable: issued, not used up{it.inUse > 0 ? ` · ${fmtQty(it.inUse)} ${it.unit} already in use` : ''}.
+                      </p>
+                    )}
                   </div>
                 )
               })}
@@ -203,6 +217,12 @@ export function RecordUsage() {
             <button type="button" onClick={addLine} className={`${outlineBtnCls} mt-4`}>
               <Plus size={16} aria-hidden /> Add another item
             </button>
+            {anyReusable && (
+              <p className="mt-4 rounded-xl bg-sand px-4 py-3 text-sm text-slate-700">
+                <strong className="font-semibold text-dark">Reusable items</strong> (towels, bedsheets…) are <strong className="font-semibold text-dark">issued</strong>, not used up:
+                they leave the store and show as <em>In use</em> until they come back through <strong className="font-semibold text-dark">Return Items</strong>, where damaged or lost pieces are written off.
+              </p>
+            )}
 
             <div className="mt-5">
               <label htmlFor="use-note" className={labelCls}>Note <span className="font-normal text-slate-500">(optional)</span></label>
@@ -227,7 +247,10 @@ export function RecordUsage() {
                 return (
                   <li key={l.key} className="flex justify-between gap-3">
                     <span className="min-w-0 truncate text-slate-600">{it?.name}</span>
-                    <span className="nums shrink-0 text-dark">{Number.isFinite(q) && q > 0 ? `−${fmtQty(q)} ${it?.unit ?? ''}` : '—'}</span>
+                    <span className="nums shrink-0 text-dark">
+                      {it?.reusable && <span className="text-slate-500">issue </span>}
+                      {Number.isFinite(q) && q > 0 ? `−${fmtQty(q)} ${it?.unit ?? ''}` : '—'}
+                    </span>
                   </li>
                 )
               })}
@@ -241,7 +264,10 @@ export function RecordUsage() {
             <button type="submit" disabled={saving || !departments.length || activeItems.length === 0} className={bigPrimaryBtnCls}>
               {saving ? 'Saving…' : 'Save usage'}
             </button>
-            <p className="text-[13px] text-slate-500">Issue / return for reusable linen (towels, bedsheets) is coming later.</p>
+            <p className="text-[13px] text-slate-500">
+              Reusable linen (towels, bedsheets) is issued here and comes back to the store through{' '}
+              <Link to="/inventory/returns" className={linkCls}>Return Items</Link>.
+            </p>
           </div>
         </aside>
       </form>

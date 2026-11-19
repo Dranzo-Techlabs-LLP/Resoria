@@ -145,11 +145,11 @@ echo "Tables ready.\n";
 
 // ---------------- Seed roles ----------------
 $roleDefaults = [
-  'Administrator' => ["view_payments","record_payments","view_expenses","edit_expenses","view_accounting","view_users","manage_users","edit_invoice","view_bookings","edit_bookings","cancel_bookings","view_calendar","view_dashboard","view_reports","view_villas","edit_villas","view_inventory","edit_inventory","manage_config"],
-  'Manager'       => ["view_dashboard","view_calendar","view_bookings","edit_bookings","cancel_bookings","view_accounting","view_expenses","edit_expenses","view_reports","view_villas","view_payments","record_payments","view_users","view_inventory","edit_inventory"],
-  'Front Desk'    => ["view_dashboard","view_calendar","view_bookings","edit_bookings","view_payments","record_payments","view_villas"],
+  'Administrator' => ["view_payments","record_payments","view_expenses","edit_expenses","view_accounting","view_users","manage_users","edit_invoice","view_bookings","edit_bookings","cancel_bookings","view_calendar","view_dashboard","view_reports","view_villas","edit_villas","view_inventory","edit_inventory","manage_config","view_ratings","manage_ratings"],
+  'Manager'       => ["view_dashboard","view_calendar","view_bookings","edit_bookings","cancel_bookings","view_accounting","view_expenses","edit_expenses","view_reports","view_villas","view_payments","record_payments","view_users","view_inventory","edit_inventory","view_ratings","manage_ratings"],
+  'Front Desk'    => ["view_dashboard","view_calendar","view_bookings","edit_bookings","view_payments","record_payments","view_villas","view_ratings","manage_ratings"],
   'B2B'           => ["view_dashboard","view_calendar","view_bookings","edit_bookings"],
-  'Owner'         => ["view_dashboard","view_calendar","view_bookings","view_accounting","view_expenses","view_reports","view_villas","view_payments","view_inventory"],
+  'Owner'         => ["view_dashboard","view_calendar","view_bookings","view_accounting","view_expenses","view_reports","view_villas","view_payments","view_inventory","view_ratings"],
 ];
 $i = 1;
 foreach ($roleDefaults as $name => $rights) {

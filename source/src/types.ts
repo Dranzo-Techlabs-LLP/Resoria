@@ -20,6 +20,7 @@ export interface Payment {
   advance?: boolean // the advance entered while booking (one per booking)
   purpose?: 'room' | 'extras' // extras = collection of the booking's additional expenses (charges)
   createdAt?: string // 'YYYY-MM-DD HH:MM:SS' when it was recorded (empty for older entries)
+  receiptNo?: string // RE-00004-R2: fixed when the payment is recorded, never renumbered
 }
 
 /** Ledger label for a payment: Advance / Remaining / Expenses / Refund. */
@@ -82,6 +83,7 @@ export interface Booking {
   cancellationCharge?: number
   charges: BookingCharge[] // additional expenses (In-house)
   events: BookingEvent[] // stay history
+  feedbackToken?: string // guest feedback link token ('' until a link is created)
 }
 
 export interface Expense {
@@ -182,8 +184,17 @@ export interface InventoryItem {
   lastRate: number // last purchase rate per unit (for stock value)
   active: boolean
   createdAt: string
+  /** Reusable items (towels, bedsheets): usage is an issue that comes back with a return. */
+  reusable: boolean
+  /** Reusable items: issued and not yet returned or written off. 0 for consumables. */
+  inUse: number
 }
-export type MovementType = 'in' | 'out' | 'adjust'
+/**
+ * in: purchase (store +) · out: consumed (store −) · adjust: physical correction (store ±)
+ * issue: reusable item sent to a department (store −, in use +) · return: back to store (store +, in use −)
+ * writeoff: issued item damaged / lost (in use −, store unchanged)
+ */
+export type MovementType = 'in' | 'out' | 'adjust' | 'issue' | 'return' | 'writeoff'
 export interface StockMovement {
   id: string
   ref: string // PUR-00001 / USE-00001 / ADJ-00001
@@ -209,11 +220,37 @@ export interface StockPurchase {
   paidAmount: number
   paymentStatus: 'Paid' | 'Unpaid' | 'Partially Paid'
   expenseId?: string
+  /** Later payments to the supplier (the first payment is part of paidAmount at purchase time). */
+  payments: { date: string; amount: number; method: string; createdAt: string }[]
 }
 export interface InventoryData {
   items: InventoryItem[]
   movements: StockMovement[]
   purchases: StockPurchase[]
+}
+
+// ---- Guest ratings ----
+export const RATING_ASPECTS = ['rooms', 'cleanliness', 'food', 'service', 'value'] as const
+export type RatingAspect = (typeof RATING_ASPECTS)[number]
+export const RATING_ASPECT_LABELS: Record<RatingAspect, string> = {
+  rooms: 'Rooms', cleanliness: 'Cleanliness', food: 'Food', service: 'Service', value: 'Value for money',
+}
+/** Where a rating came from. 'Guest feedback link' = submitted by the guest through the shared link. */
+export const RATING_SOURCES = [
+  'Guest feedback link', 'Phone / WhatsApp', 'In person', 'Google', 'Booking.com', 'Agoda', 'MakeMyTrip', 'Airbnb', 'TripAdvisor', 'Other',
+] as const
+export interface Rating {
+  id: string
+  bookingRef?: string // linked stay (optional for public reviews)
+  guest: string
+  overall: number // 1–5
+  aspects: Partial<Record<RatingAspect, number>> // 1–5 each, optional
+  comment?: string
+  source: string // one of RATING_SOURCES
+  date: string // ISO date of the review
+  createdAt: string
+  response?: string // the resort's reply / follow-up note
+  respondedAt?: string
 }
 
 /** The full client dataset. */
@@ -226,6 +263,7 @@ export interface AppData {
   villaOverrides: Record<string, RoomOverride>
   settings: AppSettings
   inventory: InventoryData
+  ratings: Rating[]
 }
 
 export interface AuthUser {

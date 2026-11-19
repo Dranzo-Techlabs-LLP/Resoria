@@ -94,6 +94,11 @@ export function AdjustStockModal({ item, onClose }: { item: InventoryItem; onClo
             <dd className={`nums mt-0.5 font-semibold ${after < 0 ? 'text-red-700' : 'text-dark'}`}>{fmtQty(after)} {item.unit}</dd>
           </div>
         </dl>
+        {item.reusable && (
+          <p className="text-[13px] text-slate-500">
+            This changes the store quantity only{item.inUse > 0 ? ` (${fmtQty(item.inUse)} ${item.unit} are in use)` : ''}. Issued pieces that come back damaged or are lost are written off in Return Items.
+          </p>
+        )}
         <FormError>{formError}</FormError>
         <div className="flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-end">
           <button type="button" onClick={onClose} className={outlineBtnCls}>Cancel</button>

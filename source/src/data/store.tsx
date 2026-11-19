@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { ROOMS } from '../lib/config'
 import {
   api, ApiError, setToken, type AdjustmentWrite, type BookingWrite, type ChargeWrite, type ItemWrite, type PurchaseWrite,
-  type UsageWrite, type UserWrite,
+  type RatingWrite, type ReturnWrite, type UsageWrite, type UserWrite,
 } from '../lib/api'
 import { roomBalance, roomPaid } from '../lib/booking'
 import { useAuth } from '../auth/AuthContext'
@@ -39,6 +39,7 @@ function emptyData(): AppData {
     villaOverrides: {},
     settings: emptySettings(),
     inventory: { items: [], movements: [], purchases: [] },
+    ratings: [],
   }
 }
 export function emptySettings(): AppSettings {
@@ -94,6 +95,16 @@ interface StoreValue {
   addUsage: (u: UsageWrite) => Promise<string>
   /** Returns the adjustment reference (ADJ-00001). */
   addAdjustment: (a: AdjustmentWrite) => Promise<string>
+  /** Return issued reusable items (RET-00001). */
+  addReturn: (r: ReturnWrite) => Promise<string>
+  payPurchase: (ref: string, p: { date: string; amount: number; method: string }) => Promise<void>
+  addRating: (r: RatingWrite) => Promise<void>
+  updateRating: (id: string, r: Partial<RatingWrite>) => Promise<void>
+  deleteRating: (id: string) => Promise<void>
+  /** Returns the feedback token (creates it once). */
+  feedbackLink: (ref: string) => Promise<string>
+  /** Moves an old room name to a current room everywhere; reloads all data. Returns the bookings changed. */
+  renameRoom: (from: string, to: string) => Promise<number>
 }
 
 const StoreContext = createContext<StoreValue | undefined>(undefined)
@@ -111,6 +122,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .then((d) => setData({
         ...emptyData(), ...d,
         settings: { ...emptySettings(), ...(d.settings ?? {}) },
+        ratings: d.ratings ?? [],
         bookings: (d.bookings ?? []).map(normalizeBooking),
       }))
       .catch((e: unknown) => {
@@ -296,6 +308,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setInventory(r.inventory)
     return r.ref
   }, [])
+  const addReturn = useCallback(async (x: ReturnWrite) => {
+    const r = await api.addReturn(x)
+    setInventory(r.inventory)
+    return r.ref
+  }, [])
+  const payPurchase = useCallback(async (ref: string, p: { date: string; amount: number; method: string }) => {
+    setInventory((await api.payPurchase(ref, p)).inventory)
+  }, [])
+  const addRating = useCallback(async (r: RatingWrite) => {
+    const { rating } = await api.addRating(r)
+    setData((d) => ({ ...d, ratings: [rating, ...d.ratings] }))
+    if (r.bookingRef) await load() // the booking's stay history gains a line
+  }, [load])
+  const updateRating = useCallback(async (id: string, r: Partial<RatingWrite>) => {
+    const { rating } = await api.updateRating(id, r)
+    setData((d) => ({ ...d, ratings: d.ratings.map((x) => (x.id === id ? rating : x)) }))
+  }, [])
+  const deleteRating = useCallback(async (id: string) => {
+    await api.deleteRating(id)
+    setData((d) => ({ ...d, ratings: d.ratings.filter((x) => x.id !== id) }))
+  }, [])
+  const feedbackLink = useCallback(async (ref: string) => {
+    const r = await api.feedbackLink(ref)
+    replaceBooking(r.booking)
+    return r.token
+  }, [])
+  const renameRoom = useCallback(async (from: string, to: string) => {
+    const r = await api.renameRoom(from, to)
+    await load()
+    return r.bookings
+  }, [load])
 
   const deleteBooking = useCallback((ref: string) => guard(async () => {
     await api.deleteBooking(ref)
@@ -327,10 +370,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole,
     saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
     recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
-    addItem, updateItem, addPurchase, addUsage, addAdjustment,
+    addItem, updateItem, addPurchase, addUsage, addAdjustment, addReturn, payPurchase,
+    addRating, updateRating, deleteRating, feedbackLink, renameRoom,
   }), [view, loading, error, clearError, load, addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole, saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
     recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
-    addItem, updateItem, addPurchase, addUsage, addAdjustment])
+    addItem, updateItem, addPurchase, addUsage, addAdjustment, addReturn, payPurchase,
+    addRating, updateRating, deleteRating, feedbackLink, renameRoom])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

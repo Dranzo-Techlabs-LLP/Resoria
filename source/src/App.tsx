@@ -22,6 +22,7 @@ import { AddStock } from './pages/inventory/AddStock'
 import { RecordUsage } from './pages/inventory/RecordUsage'
 import { StockHistory } from './pages/inventory/StockHistory'
 import { StockDetails } from './pages/inventory/StockDetails'
+import { ReturnItems } from './pages/inventory/ReturnItems'
 import { NotFound } from './pages/NotFound'
 
 function BillsRedirect() {
@@ -57,7 +58,8 @@ export default function App() {
           <Route path="financial-overview" element={<RequireRight right="view_accounting"><Accounting /></RequireRight>} />
           <Route path="users" element={<RequireRight right="view_users"><UsersAndRoles /></RequireRight>} />
           <Route path="configuration" element={<RequireRight right={['view_villas', 'manage_config']}><Configuration /></RequireRight>} />
-          <Route path="rating" element={<Rating />} />
+          <Route path="rating" element={<RequireRight right="view_ratings"><Rating /></RequireRight>} />
+          <Route path="inventory/returns" element={<RequireRight right="edit_inventory"><ReturnItems /></RequireRight>} />
           {/* Older links */}
           <Route path="accounting" element={<Navigate to="/financial-overview" replace />} />
           <Route path="roles" element={<Navigate to="/users?tab=roles" replace />} />

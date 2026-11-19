@@ -19,6 +19,8 @@ export const PERMISSIONS: { key: string; label: string }[] = [
   { key: 'view_inventory', label: 'View inventory' },
   { key: 'edit_inventory', label: 'Add stock / record usage' },
   { key: 'manage_config', label: 'Edit configuration (agents, menu, hall pricing, inventory items)' },
+  { key: 'view_ratings', label: 'View guest ratings' },
+  { key: 'manage_ratings', label: 'Add / reply to guest ratings, share feedback links' },
 ]
 
 export const ALL_RIGHTS: string[] = PERMISSIONS.map((p) => p.key)
@@ -28,16 +30,16 @@ export const ROLE_DEFAULTS: Record<string, string[]> = {
   Manager: [
     'view_dashboard', 'view_calendar', 'view_bookings', 'edit_bookings', 'cancel_bookings',
     'view_accounting', 'view_expenses', 'edit_expenses', 'view_reports', 'view_villas',
-    'view_payments', 'record_payments', 'view_users', 'view_inventory', 'edit_inventory',
+    'view_payments', 'record_payments', 'view_users', 'view_inventory', 'edit_inventory', 'view_ratings', 'manage_ratings',
   ],
   'Front Desk': [
     'view_dashboard', 'view_calendar', 'view_bookings', 'edit_bookings',
-    'view_payments', 'record_payments', 'view_villas',
+    'view_payments', 'record_payments', 'view_villas', 'view_ratings', 'manage_ratings',
   ],
   B2B: ['view_dashboard', 'view_calendar', 'view_bookings', 'edit_bookings'],
   Owner: [
     'view_dashboard', 'view_calendar', 'view_bookings', 'view_accounting',
-    'view_expenses', 'view_reports', 'view_villas', 'view_payments', 'view_inventory',
+    'view_expenses', 'view_reports', 'view_villas', 'view_payments', 'view_inventory', 'view_ratings',
   ],
 }
 

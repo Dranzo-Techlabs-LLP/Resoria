@@ -6,7 +6,7 @@
 // ------------------------------------------------------------------
 import type {
   AppData, AppSettings, Booking, BookingStatus, ChargeCategory, Expense, InventoryData, InventoryItem, InvoiceSettings,
-  Payment, Role, RoomOverride, SettingsKey, User,
+  Payment, Rating, Role, RoomOverride, SettingsKey, User,
 } from '../types'
 
 const ENV = (import.meta as unknown as { env?: Record<string, string> }).env ?? {}
@@ -68,7 +68,15 @@ export interface AdjustmentWrite {
   qty: number // signed: +found / −lost or damaged
   note: string
 }
-export type ItemWrite = Pick<InventoryItem, 'name' | 'category' | 'unit' | 'minStock' | 'openingStock' | 'active'>
+export type ItemWrite = Pick<InventoryItem, 'name' | 'category' | 'unit' | 'minStock' | 'openingStock' | 'active' | 'reusable'>
+/** Return issued reusable items: `returned` go back to store, `damaged` are written off. */
+export interface ReturnWrite {
+  date: string
+  department: string
+  note?: string
+  lines: { itemId: string; returned: number; damaged: number }[]
+}
+export type RatingWrite = Omit<Rating, 'id' | 'createdAt' | 'respondedAt'>
 
 /** Fields the Add/Edit user forms send. Password: required to add, optional to edit. */
 export type UserWrite = Pick<User, 'name' | 'email' | 'role' | 'active'> & {
@@ -267,4 +275,34 @@ export const api = {
     req<{ inventory: InventoryData; ref: string }>('/inventory/adjustments', { method: 'POST', body: a }),
   /** Purchase bill: '/inventory/purchases/{ref}/bill' for openFile(). */
   billPath: (ref: string) => `/inventory/purchases/${enc(ref)}/bill`,
+  /** Usage of a reusable item is recorded as an issue automatically (same addUsage call). */
+  addReturn: (r: ReturnWrite) =>
+    req<{ inventory: InventoryData; ref: string }>('/inventory/returns', { method: 'POST', body: r }),
+  /** Pay a supplier later for an Unpaid / Partially Paid purchase. */
+  payPurchase: (ref: string, p: { date: string; amount: number; method: string }) =>
+    req<{ inventory: InventoryData }>(`/inventory/purchases/${enc(ref)}/payments`, { method: 'POST', body: p }),
+
+  // ---- Guest ratings ----
+  addRating: (r: RatingWrite) =>
+    req<{ rating: Rating }>('/ratings', { method: 'POST', body: r }),
+  updateRating: (id: string, r: Partial<RatingWrite>) =>
+    req<{ rating: Rating }>(`/ratings/${enc(id)}`, { method: 'PUT', body: r }),
+  deleteRating: (id: string) =>
+    req<{ ok: boolean }>(`/ratings/${enc(id)}`, { method: 'DELETE' }),
+  /** Creates (once) the booking's guest feedback link token; the link is <site>/feedback?t=<token>. */
+  feedbackLink: (ref: string) =>
+    req<{ token: string; booking: Booking }>(`/bookings/${enc(ref)}/feedback-link`, { method: 'POST', body: {} }),
+
+  // ---- Rooms from older bookings ----
+  /** Move every booking / expense / user / room setting from an old room name to one of the current rooms. */
+  renameRoom: (from: string, to: string) =>
+    req<{ ok: boolean; bookings: number }>('/rooms/rename', { method: 'POST', body: { from, to } }),
+}
+
+/** Public guest feedback (no login): used by the website's /feedback page. */
+export const publicFeedback = {
+  get: (token: string) =>
+    req<{ guest: string; rooms: string; checkIn: string; checkOut: string; submitted: boolean }>(`/feedback/${enc(token)}`),
+  submit: (token: string, r: { overall: number; aspects: Partial<Record<string, number>>; comment: string }) =>
+    req<{ ok: boolean }>(`/feedback/${enc(token)}`, { method: 'POST', body: r }),
 }

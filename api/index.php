@@ -116,6 +116,34 @@ try {
     json_out(['ok' => true, 'delivered' => true]);
   }
 
+  // ---------- Public: guest feedback link (the website's /feedback page) ----------
+  if (count($seg) === 2 && $seg[0] === 'feedback' && in_array($method, ['GET', 'POST'], true)) {
+    $token = $seg[1];
+    if (!preg_match('/^[a-f0-9]{24,40}$/', $token)) fail('This feedback link is not valid.', 404);
+    $st = db()->prepare("SELECT * FROM bookings WHERE feedback_token = ? AND status <> 'cancelled'");
+    $st->execute([$token]);
+    $bk = $st->fetch();
+    if (!$bk) fail('This feedback link is not valid.', 404);
+    $done = db()->prepare("SELECT 1 FROM ratings WHERE booking_ref = ? AND source = 'Guest feedback link'");
+    $done->execute([$bk['ref']]);
+    $submitted = (bool)$done->fetch();
+    if ($method === 'GET') {
+      json_out(['guest' => preg_split('/\s+/', trim($bk['guest']))[0], 'rooms' => $bk['villa'],
+                'checkIn' => $bk['check_in'], 'checkOut' => $bk['check_out'], 'submitted' => $submitted]);
+    }
+    if ($submitted) fail('Thank you, we already have your feedback for this stay.', 409);
+    $b = body();
+    if (trim((string)($b['website'] ?? '')) !== '') json_out(['ok' => true]); // bots
+    $overall = stars($b['overall'] ?? null, 'overall rating');
+    $comment = mb_substr(trim((string)($b['comment'] ?? '')), 0, 3000);
+    $t = now_dt();
+    db()->prepare('INSERT INTO ratings (id, booking_ref, guest, overall, aspects, comment, source, date, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        ->execute([gen_id('g'), $bk['ref'], $bk['guest'], $overall, json_encode(clean_aspects($b['aspects'] ?? [])), $comment ?: null,
+                   'Guest feedback link', date('Y-m-d'), $t]);
+    add_event($bk['ref'], "Guest rated the stay {$overall}★ (feedback link)", $t);
+    json_out(['ok' => true], 201);
+  }
+
   // ---------- Everything below requires a valid session ----------
   $me = require_user();
 
@@ -507,7 +535,8 @@ try {
     $dup->execute([$name, $unit, $cur['id'] ?? '']);
     if ($dup->fetch()) fail("“$name” ($unit) already exists.");
     return ['name' => $name, 'category' => $cat, 'unit' => $unit, 'min_stock' => f2($min),
-            'active' => array_key_exists('active', $b) ? (int)!!$b['active'] : (int)($cur['active'] ?? 1)];
+            'active' => array_key_exists('active', $b) ? (int)!!$b['active'] : (int)($cur['active'] ?? 1),
+            'reusable' => array_key_exists('reusable', $b) ? (int)!!$b['reusable'] : (int)($cur['reusable'] ?? 0)];
   };
 
   if ($method === 'POST' && $path === 'inventory/items') {
@@ -519,8 +548,8 @@ try {
     $pdo = db();
     $pdo->beginTransaction();
     $id = 'INV-' . str_pad((string)next_number('INV'), 4, '0', STR_PAD_LEFT);
-    $pdo->prepare('INSERT INTO inventory_items (id, name, category, unit, min_stock, opening_stock, active, created_at) VALUES (?,?,?,?,?,?,?,?)')
-        ->execute([$id, $f['name'], $f['category'], $f['unit'], $f['min_stock'], f2($open), $f['active'], now_dt()]);
+    $pdo->prepare('INSERT INTO inventory_items (id, name, category, unit, min_stock, opening_stock, active, reusable, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        ->execute([$id, $f['name'], $f['category'], $f['unit'], $f['min_stock'], f2($open), $f['active'], $f['reusable'], now_dt()]);
     $pdo->commit();
     $inv = inventory_payload();
     $item = current(array_filter($inv['items'], fn($i) => $i['id'] === $id));
@@ -534,8 +563,11 @@ try {
     $cur = $st->fetch();
     if (!$cur) fail('Inventory item not found.', 404);
     $f = $itemInput(body(), $cur);
-    db()->prepare('UPDATE inventory_items SET name = ?, category = ?, unit = ?, min_stock = ?, active = ? WHERE id = ?')
-        ->execute([$f['name'], $f['category'], $f['unit'], $f['min_stock'], $f['active'], $cur['id']]);
+    if (!$f['reusable'] && (int)($cur['reusable'] ?? 0) === 1 && lock_item($cur['id'])['in_use'] > 0) {
+      fail('Some of this item is still issued. Return it before marking the item as not reusable.');
+    }
+    db()->prepare('UPDATE inventory_items SET name = ?, category = ?, unit = ?, min_stock = ?, active = ?, reusable = ? WHERE id = ?')
+        ->execute([$f['name'], $f['category'], $f['unit'], $f['min_stock'], $f['active'], $f['reusable'], $cur['id']]);
     json_out(['inventory' => inventory_payload()]);
   }
 
@@ -606,7 +638,8 @@ try {
       if ((int)$item['active'] !== 1) fail("“{$item['name']}” is inactive.");
       $qty = pos_qty($l['qty'] ?? null);
       if ($qty > $item['available']) fail("Only {$item['available']} {$item['unit']} of “{$item['name']}” is available.");
-      add_movement($item, $ref, 'out', $qty, ['date' => $date, 'department' => $dept, 'note' => $note]);
+      // Reusable items (linen) are issued, and come back with a return
+      add_movement($item, $ref, (int)($item['reusable'] ?? 0) === 1 ? 'issue' : 'out', $qty, ['date' => $date, 'department' => $dept, 'note' => $note]);
     }
     $pdo->commit();
     json_out(['inventory' => inventory_payload(), 'ref' => $ref], 201);
@@ -807,6 +840,179 @@ try {
           ->execute([$prefix, $next, $padding, $terms]);
     }
     json_out(['invoice' => public_invoice(db()->query('SELECT * FROM invoice_settings WHERE id = 1')->fetch())]);
+  }
+
+  // Return issued reusable items: good ones back to store, damaged / lost written off
+  if ($method === 'POST' && $path === 'inventory/returns') {
+    require_right($me, 'edit_inventory');
+    $b = body();
+    $date = valid_date($b['date'] ?? '');
+    $dept = mb_substr(trim((string)($b['department'] ?? '')), 0, 60);
+    if ($dept === '') fail('Choose the department.');
+    $lines = is_array($b['lines'] ?? null) ? $b['lines'] : [];
+    if (!$lines) fail('Add at least one item.');
+    $note = mb_substr(trim((string)($b['note'] ?? '')), 0, 255) ?: null;
+    $pdo = db();
+    $pdo->beginTransaction();
+    $ref = 'RET-' . str_pad((string)next_number('RET'), 5, '0', STR_PAD_LEFT);
+    foreach ($lines as $l) {
+      $item = lock_item((string)($l['itemId'] ?? ''));
+      if ((int)($item['reusable'] ?? 0) !== 1) fail("“{$item['name']}” is not a reusable item.");
+      $ret = $l['returned'] ?? 0;
+      $dmg = $l['damaged'] ?? 0;
+      if (!is_numeric($ret) || !is_numeric($dmg) || (float)$ret < 0 || (float)$dmg < 0) fail('Quantities cannot be negative.');
+      $ret = f2($ret);
+      $dmg = f2($dmg);
+      if ($ret + $dmg <= 0) fail("Enter what came back for “{$item['name']}”.");
+      if ($ret + $dmg > $item['in_use']) fail("Only {$item['in_use']} {$item['unit']} of “{$item['name']}” is issued.");
+      if ($ret > 0) {
+        add_movement($item, $ref, 'return', $ret, ['date' => $date, 'department' => $dept, 'note' => $note]);
+        $item = lock_item($item['id']);
+      }
+      if ($dmg > 0) add_movement($item, $ref, 'writeoff', $dmg, ['date' => $date, 'department' => $dept, 'note' => $note ?? 'Damaged / lost']);
+    }
+    $pdo->commit();
+    json_out(['inventory' => inventory_payload(), 'ref' => $ref], 201);
+  }
+
+  // Pay a supplier later for an unpaid / partially paid purchase
+  if ($method === 'POST' && count($seg) === 4 && $seg[0] === 'inventory' && $seg[1] === 'purchases' && $seg[3] === 'payments') {
+    require_right($me, 'edit_inventory');
+    $b = body();
+    $amount = (int)round((float)($b['amount'] ?? 0));
+    $date = valid_date($b['date'] ?? date('Y-m-d'));
+    $m = $methodOf($b['method'] ?? '');
+    if ($m === '') fail('Choose the payment method.');
+    $pdo = db();
+    $pdo->beginTransaction();
+    $st = $pdo->prepare('SELECT * FROM stock_purchases WHERE ref = ? FOR UPDATE');
+    $st->execute([$seg[2]]);
+    $p = $st->fetch() ?: fail('Purchase not found.', 404);
+    $due = (int)$p['total'] - (int)$p['paid_amount'];
+    if ($due <= 0) fail('This purchase is already fully paid.');
+    if ($date < $p['date']) fail('The payment date can’t be before the purchase date.');
+    if ($amount <= 0 || $amount > $due) fail('Enter an amount between ₹1 and the ' . inr($due) . ' due.');
+    $paid = (int)$p['paid_amount'] + $amount;
+    $status = $paid >= (int)$p['total'] ? 'Paid' : 'Partially Paid';
+    $pdo->prepare('UPDATE stock_purchases SET paid_amount = ?, payment_status = ? WHERE ref = ?')->execute([$paid, $status, $p['ref']]);
+    $pdo->prepare('INSERT INTO purchase_payments (id, ref, date, amount, method, created_at) VALUES (?,?,?,?,?,?)')
+        ->execute([gen_id('q'), $p['ref'], $date, $amount, $m, now_dt()]);
+    if ($p['expense_id']) {
+      // keep the linked expense's note in step with the payment status
+      $pdo->prepare("UPDATE expenses SET description = REPLACE(REPLACE(description, ' (Unpaid)', ?), ' (Partially Paid)', ?) WHERE id = ?")
+          ->execute([$status === 'Paid' ? '' : ' (Partially Paid)', $status === 'Paid' ? '' : ' (Partially Paid)', $p['expense_id']]);
+    }
+    $pdo->commit();
+    json_out(['inventory' => inventory_payload()], 201);
+  }
+
+  // ---------- Guest ratings ----------
+  $ratingInput = function (array $b, ?array $cur = null): array {
+    $pick = fn(string $k, string $col, $def = null) => array_key_exists($k, $b) ? $b[$k] : ($cur[$col] ?? $def);
+    $guest = mb_substr(trim((string)$pick('guest', 'guest', '')), 0, 160);
+    if ($guest === '') fail('Guest name is required.');
+    $source = mb_substr(trim((string)$pick('source', 'source', '')), 0, 40);
+    if ($source === '') fail('Choose where the rating came from.');
+    $ref = trim((string)$pick('bookingRef', 'booking_ref', '')) ?: null;
+    if ($ref !== null) $ref = booking_row($ref)['ref'];
+    return [
+      'booking_ref' => $ref, 'guest' => $guest, 'overall' => stars($pick('overall', 'overall'), 'overall rating'),
+      'aspects' => json_encode(array_key_exists('aspects', $b) ? clean_aspects($b['aspects']) : (json_decode($cur['aspects'] ?? '{}', true) ?: [])),
+      'comment' => (mb_substr(trim((string)$pick('comment', 'comment', '')), 0, 3000) ?: null),
+      'source' => $source, 'date' => valid_date($pick('date', 'date', date('Y-m-d'))),
+    ];
+  };
+
+  if ($method === 'POST' && $path === 'ratings') {
+    require_right($me, 'manage_ratings');
+    $b = body();
+    $f = $ratingInput($b);
+    $id = gen_id('g');
+    $resp = mb_substr(trim((string)($b['response'] ?? '')), 0, 3000) ?: null;
+    db()->prepare('INSERT INTO ratings (id, booking_ref, guest, overall, aspects, comment, source, date, created_at, response, responded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+        ->execute([$id, $f['booking_ref'], $f['guest'], $f['overall'], $f['aspects'], $f['comment'], $f['source'], $f['date'], now_dt(), $resp, $resp ? now_dt() : null]);
+    if ($f['booking_ref']) add_event($f['booking_ref'], "Guest rating {$f['overall']}★ recorded ({$f['source']})");
+    json_out(['rating' => get_rating($id)], 201);
+  }
+
+  if (($method === 'PUT' || $method === 'DELETE') && count($seg) === 2 && $seg[0] === 'ratings') {
+    require_right($me, 'manage_ratings');
+    $st = db()->prepare('SELECT * FROM ratings WHERE id = ?');
+    $st->execute([$seg[1]]);
+    $cur = $st->fetch() ?: fail('Rating not found.', 404);
+    if ($method === 'DELETE') {
+      db()->prepare('DELETE FROM ratings WHERE id = ?')->execute([$cur['id']]);
+      json_out(['ok' => true]);
+    }
+    $b = body();
+    // A guest's own feedback can be replied to, but its scores and words stay as the guest gave them
+    $f = $cur['source'] === 'Guest feedback link' ? null : $ratingInput($b, $cur);
+    if ($f) {
+      db()->prepare('UPDATE ratings SET booking_ref = ?, guest = ?, overall = ?, aspects = ?, comment = ?, source = ?, date = ? WHERE id = ?')
+          ->execute([$f['booking_ref'], $f['guest'], $f['overall'], $f['aspects'], $f['comment'], $f['source'], $f['date'], $cur['id']]);
+    }
+    if (array_key_exists('response', $b)) {
+      $resp = mb_substr(trim((string)$b['response']), 0, 3000) ?: null;
+      db()->prepare('UPDATE ratings SET response = ?, responded_at = ? WHERE id = ?')->execute([$resp, $resp ? now_dt() : null, $cur['id']]);
+    }
+    json_out(['rating' => get_rating($cur['id'])]);
+  }
+
+  if ($method === 'POST' && count($seg) === 3 && $seg[0] === 'bookings' && $seg[2] === 'feedback-link') {
+    require_right($me, 'manage_ratings');
+    $cur = booking_row($seg[1]);
+    if (!in_array($cur['status'], ['checked in', 'completed'], true)) fail('Feedback links are for in-house and completed stays.');
+    $token = $cur['feedback_token'] ?? '';
+    if (!$token) {
+      $token = bin2hex(random_bytes(12));
+      db()->prepare('UPDATE bookings SET feedback_token = ? WHERE ref = ?')->execute([$token, $cur['ref']]);
+      add_event($cur['ref'], 'Guest feedback link created');
+    }
+    json_out(['token' => $token, 'booking' => get_booking($cur['ref'])]);
+  }
+
+  // ---------- Rooms from the older room list ----------
+  if ($method === 'POST' && $path === 'rooms/rename') {
+    if (!in_array('manage_config', role_rights($me['role']), true)) require_right($me, 'edit_villas');
+    $b = body();
+    $from = trim((string)($b['from'] ?? ''));
+    $to = trim((string)($b['to'] ?? ''));
+    if ($from === '' || in_array($from, CAPACITY_ROOMS, true) || $from === 'Full Property') fail('Choose a room from the older room list.');
+    if (!in_array($to, CAPACITY_ROOMS, true)) fail('Choose one of the current rooms.');
+    $pdo = db();
+    $pdo->beginTransaction();
+    $n = 0;
+    $st = $pdo->query('SELECT ref, villa, status, check_in, check_out FROM bookings ORDER BY check_in ASC');
+    $upd = $pdo->prepare('UPDATE bookings SET villa = ? WHERE ref = ?');
+    $clash = $pdo->prepare("SELECT ref, guest, villa FROM bookings WHERE status <> 'cancelled' AND check_in < ? AND check_out > ? AND ref <> ?");
+    foreach ($st->fetchAll() as $bk) {
+      if (!in_array($from, array_map('trim', explode(',', $bk['villa'])), true)) continue;
+      if ($bk['status'] !== 'cancelled') {
+        // Never create a double booking: the new room must be free for this stay
+        $clash->execute([$bk['check_out'], $bk['check_in'], $bk['ref']]);
+        foreach ($clash->fetchAll() as $o) {
+          if (in_array($to, villa_rooms($o['villa']), true)) {
+            fail("Can't move $from to $to: {$bk['ref']} ({$bk['check_in']} to {$bk['check_out']}) would clash with {$o['ref']} ({$o['guest']}) in $to. Give one of them another room first, or pick a different room.", 409);
+          }
+        }
+      }
+      $upd->execute([swap_room($bk['villa'], $from, $to), $bk['ref']]);
+      add_event($bk['ref'], "Room $from moved to $to (room list update)");
+      $n++;
+    }
+    foreach (['expenses' => 'id', 'users' => 'id'] as $table => $key) {
+      $rows = $pdo->query("SELECT $key, villa FROM $table WHERE villa IS NOT NULL AND villa <> ''")->fetchAll();
+      $u = $pdo->prepare("UPDATE $table SET villa = ? WHERE $key = ?");
+      foreach ($rows as $r) {
+        if (in_array($from, array_map('trim', explode(',', $r['villa'])), true)) $u->execute([swap_room($r['villa'], $from, $to), $r[$key]]);
+      }
+    }
+    $has = $pdo->prepare('SELECT 1 FROM room_overrides WHERE villa = ?');
+    $has->execute([$to]);
+    if ($has->fetch()) $pdo->prepare('DELETE FROM room_overrides WHERE villa = ?')->execute([$from]);
+    else $pdo->prepare('UPDATE room_overrides SET villa = ? WHERE villa = ?')->execute([$to, $from]);
+    $pdo->commit();
+    json_out(['ok' => true, 'bookings' => $n]);
   }
 
   // ---------- Room overrides (base rate / notes / capacity) ----------

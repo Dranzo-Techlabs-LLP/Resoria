@@ -1,9 +1,10 @@
 import { useState, type MouseEvent, type ReactNode } from 'react'
 import { ArrowDown, ArrowUp, ArrowUpDown, Paperclip } from 'lucide-react'
 import { api, openFile } from '../../lib/api'
+import { formatINR } from '../../lib/format'
 import { Pill, type PillTone } from '../ui/Pill'
 import { labelCls } from '../styles'
-import type { InventoryItem, MovementType, StockMovement } from '../../types'
+import type { InventoryItem, MovementType, StockMovement, StockPurchase } from '../../types'
 
 // ------------------------------------------------------------------
 //  Inventory module helpers (shared by the inventory pages + Inventory Master)
@@ -49,21 +50,103 @@ export function ActivePill({ active }: { active: boolean }) {
   return <Pill tone={active ? 'green' : 'grey'}>{active ? 'Active' : 'Inactive'}</Pill>
 }
 
-/** Value of what's on hand, at the last purchase rate. */
-export function stockValue(i: Pick<InventoryItem, 'available' | 'lastRate'>): number {
-  return Math.max(0, i.available) * (i.lastRate || 0)
+/** Value of what the resort owns (in store + reusable items in use), at the last purchase rate. */
+export function stockValue(i: Pick<InventoryItem, 'available' | 'inUse' | 'lastRate'>): number {
+  return (Math.max(0, i.available) + Math.max(0, i.inUse || 0)) * (i.lastRate || 0)
+}
+export function ReusablePill() {
+  return <Pill tone="blue">Reusable</Pill>
 }
 
 // ---- Movements ----
-export const MOVEMENT_LABEL: Record<MovementType, string> = { in: 'Stock In', out: 'Stock Out', adjust: 'Adjustment' }
-const MOVEMENT_TONE: Record<MovementType, PillTone> = { in: 'green', out: 'blue', adjust: 'amber' }
+export const MOVEMENT_LABEL: Record<MovementType, string> = {
+  in: 'Stock In', out: 'Stock Out', adjust: 'Adjustment', issue: 'Issue', return: 'Return', writeoff: 'Write-off',
+}
+const MOVEMENT_TONE: Record<MovementType, PillTone> = {
+  in: 'green', out: 'blue', adjust: 'amber', issue: 'blue', return: 'green', writeoff: 'red',
+}
 export function MovementPill({ type }: { type: MovementType }) {
   return <Pill tone={MOVEMENT_TONE[type]}>{MOVEMENT_LABEL[type]}</Pill>
 }
-/** Signed change a movement made to the balance (+in, −out, adjustments are already signed). */
+/**
+ * Signed change a movement made to the STORE balance: +in / +return, −out / −issue,
+ * adjustments are already signed, a write-off leaves the store unchanged (it reduces "in use").
+ */
 export function movementDelta(m: Pick<StockMovement, 'type' | 'qty'>): number {
-  return m.type === 'out' ? -Math.abs(m.qty) : m.type === 'in' ? Math.abs(m.qty) : m.qty
+  switch (m.type) {
+    case 'in': case 'return': return Math.abs(m.qty)
+    case 'out': case 'issue': return -Math.abs(m.qty)
+    case 'writeoff': return 0
+    default: return m.qty
+  }
 }
+/** Quantity cell of a movement row: "+12", "−3", or "−2 (in use)" for a write-off. */
+export function MovementQty({ m }: { m: Pick<StockMovement, 'type' | 'qty'> }) {
+  if (m.type === 'writeoff') {
+    return <span className="text-red-700">{fmtSigned(-Math.abs(m.qty))} <span className="font-normal text-slate-500">(in use)</span></span>
+  }
+  const d = movementDelta(m)
+  return <span className={d > 0 ? 'text-ok' : d < 0 ? 'text-red-700' : ''}>{fmtSigned(d)}</span>
+}
+/** Second line under the movement pill: supplier (in), department (usage / issue / return / write-off), reason (adjust). */
+export function movementDetail(m: StockMovement): string | undefined {
+  if (m.type === 'in') return m.supplier
+  if (m.type === 'adjust') return m.note
+  return [m.department, m.note].filter(Boolean).join(' · ') || undefined
+}
+
+/**
+ * Reusable items still out, per item and department. Issues are matched FIFO: a return / write-off
+ * first settles the returning department's own issues, then the oldest issues of other departments
+ * (linen often comes back through the laundry rather than the department it was issued to).
+ */
+export function inUseByDepartment(movements: StockMovement[]): Map<string, Map<string, number>> {
+  const lots = new Map<string, { dept: string; qty: number }[]>()
+  const ordered = movements
+    .filter((m) => m.type === 'issue' || m.type === 'return' || m.type === 'writeoff')
+    .sort((a, b) => -newestFirst(a, b))
+  for (const m of ordered) {
+    const list = lots.get(m.itemId) ?? []
+    lots.set(m.itemId, list)
+    const dept = m.department?.trim() || 'Unassigned'
+    if (m.type === 'issue') {
+      list.push({ dept, qty: Math.abs(m.qty) })
+      continue
+    }
+    let left = Math.abs(m.qty)
+    for (const own of [true, false]) {
+      for (const lot of list) {
+        if (left <= 0) break
+        if ((lot.dept === dept) !== own || lot.qty <= 0) continue
+        const take = Math.min(lot.qty, left)
+        lot.qty -= take
+        left -= take
+      }
+    }
+  }
+  const out = new Map<string, Map<string, number>>()
+  for (const [itemId, list] of lots) {
+    const byDept = new Map<string, number>()
+    for (const lot of list) if (lot.qty > 0.0001) byDept.set(lot.dept, Math.round(((byDept.get(lot.dept) ?? 0) + lot.qty) * 100) / 100)
+    if (byDept.size) out.set(itemId, byDept)
+  }
+  return out
+}
+
+// ---- Supplier dues ----
+/** Still owed to the supplier for a purchase. */
+export function purchaseDue(p: Pick<StockPurchase, 'total' | 'paidAmount'>): number {
+  return Math.max(0, Math.round((p.total - (p.paidAmount || 0)) * 100) / 100)
+}
+export function isPurchaseDue(p: StockPurchase): boolean {
+  return p.paymentStatus !== 'Paid' && purchaseDue(p) > 0
+}
+/** "Due ₹4,500" next to an unpaid / partly paid purchase reference. */
+export function DuePill({ purchase }: { purchase?: StockPurchase }) {
+  if (!purchase || !isPurchaseDue(purchase)) return null
+  return <Pill tone="amber">Due {formatINR(purchaseDue(purchase))}</Pill>
+}
+
 /** Newest first: by transaction date, then by when it was recorded. */
 export function newestFirst(a: StockMovement, b: StockMovement): number {
   if (a.date !== b.date) return a.date < b.date ? 1 : -1
