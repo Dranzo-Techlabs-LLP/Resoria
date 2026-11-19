@@ -19,6 +19,11 @@ const enc = encodeURIComponent
 
 // ---- Status timeline -------------------------------------------------
 
+/** When the stay's money was finally settled: the latest recorded payment (none → ''). */
+function settledAt(b: Booking): string {
+  return b.payments.reduce((t, p) => ((p.createdAt || '') > t ? p.createdAt || '' : t), '')
+}
+
 /** Booked → Check-in → Check-out → Completed; bars filled up to the current stage. */
 export function StatusTimeline({ booking: b }: { booking: Booking }) {
   const stage = isCompleted(b) ? 3 : isInHouse(b) ? 1 : 0
@@ -35,7 +40,9 @@ export function StatusTimeline({ booking: b }: { booking: Booking }) {
     },
     {
       label: 'Completed',
-      sub: b.completedAt ? fmtDateTimeShort(b.completedAt) : stage >= 3 ? (b.checkedOutAt ? fmtDateTimeShort(b.checkedOutAt) : '—') : 'After checkout',
+      // Completed = the date of the final payment settlement (the last payment of the stay), as the sheet asks;
+      // falls back to the completion time for stays settled before payments were time-stamped
+      sub: stage >= 3 ? fmtDateTimeShort(settledAt(b) || b.completedAt || b.checkedOutAt) || '—' : 'After checkout',
     },
   ]
   return (

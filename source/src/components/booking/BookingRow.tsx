@@ -38,6 +38,9 @@ export function BookingRow({ booking: b, canEdit, canCancel, onCancel, onRemove 
     items = [{ label: 'Remove', danger: true, hidden: !canCancel, onClick: () => onRemove(b) }]
   } else {
     items = [
+      // In-house: manage the stay (food orders, hall, services) straight from the list
+      { label: 'Add expense', hidden: !canEdit || !isInHouse(b), onClick: () => navigate(`${to}?add=expense`) },
+      { label: 'Collect / check-out', hidden: !isInHouse(b), onClick: () => navigate(to) },
       { label: 'Edit', hidden: !canEdit, onClick: () => navigate(`${to}/edit`) },
       { label: 'Cancel', hidden: !canCancel || isInHouse(b), onClick: () => onCancel(b) },
       { label: 'Remove', danger: true, hidden: !canCancel || isInHouse(b), onClick: () => onRemove(b) },

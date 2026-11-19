@@ -318,6 +318,10 @@ try {
     require_right($me, 'cancel_bookings');
     $cur = booking_row($seg[1]);
     $ref = $cur['ref'];
+    // In-house and completed stays are kept for the record (and their bills); only bookings
+    // that haven't started, or were cancelled, can be removed.
+    if ($cur['status'] === 'checked in') fail("An in-house booking can't be removed. Check the guest out first.");
+    if ($cur['status'] === 'completed') fail("Completed bookings are kept for the record and can't be removed.");
     $pdo = db();
     $pdo->beginTransaction();
     $pdo->prepare('DELETE FROM payments WHERE booking_ref = ?')->execute([$ref]);

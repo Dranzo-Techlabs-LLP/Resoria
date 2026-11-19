@@ -56,6 +56,8 @@ interface StoreValue {
   error: string | null
   clearError: () => void
   reload: () => void
+  /** Re-fetch everything quietly (no spinner, errors ignored). */
+  refresh: () => Promise<void>
   addExpense: (e: Omit<Expense, 'id'>) => Promise<void>
   updateExpense: (id: string, e: Omit<Expense, 'id'>) => Promise<void>
   deleteExpense: (id: string) => Promise<void>
@@ -135,6 +137,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
       .finally(() => setLoading(false))
   }, [logout])
+
+  const refresh = useCallback(async () => {
+    try {
+      const d = await api.bootstrap()
+      setData({
+        ...emptyData(), ...d,
+        settings: { ...emptySettings(), ...(d.settings ?? {}) },
+        ratings: d.ratings ?? [],
+        bookings: (d.bookings ?? []).map(normalizeBooking),
+      })
+    } catch { /* keep what's on screen; the next refresh or action will retry */ }
+  }, [])
+
+  // Several staff use the app at once: pick up their bookings, payments and changes when the
+  // window comes back into focus and every minute while it's visible.
+  useEffect(() => {
+    if (!user) return
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    const timer = window.setInterval(onVisible, 60_000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+      window.clearInterval(timer)
+    }
+  }, [user, refresh])
 
   // Load everything once the user is authenticated; clear on logout.
   useEffect(() => {
@@ -366,13 +395,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [data])
 
   const value = useMemo<StoreValue>(() => ({
-    data: view, loading, error, clearError, reload: load,
+    data: view, loading, error, clearError, reload: load, refresh,
     addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole,
     saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
     recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
     addItem, updateItem, addPurchase, addUsage, addAdjustment, addReturn, payPurchase,
     addRating, updateRating, deleteRating, feedbackLink, renameRoom,
-  }), [view, loading, error, clearError, load, addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole, saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
+  }), [view, loading, error, clearError, load, refresh, addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole, saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
     recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
     addItem, updateItem, addPurchase, addUsage, addAdjustment, addReturn, payPurchase,
     addRating, updateRating, deleteRating, feedbackLink, renameRoom])

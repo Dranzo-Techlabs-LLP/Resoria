@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useState, type ReactNode } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { can, useAuth } from '../auth/AuthContext'
 import { useStore } from '../data/store'
 import {
@@ -75,13 +75,33 @@ export function BookingDetail() {
   const { ref } = useParams<{ ref: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
-  const { data, checkIn, checkOut, deleteCharge } = useStore()
+  const { data, checkIn, checkOut, deleteCharge, refresh } = useStore()
   const toast = useToast()
+  const [search, setSearch] = useSearchParams()
   const [popup, setPopup] = useState<Popup | null>(null)
   const close = () => setPopup(null)
+  const [refreshed, setRefreshed] = useState(false)
 
   const booking = data.bookings.find((b) => b.ref === ref) ?? data.bookings.find((b) => b.ref.toLowerCase() === (ref ?? '').toLowerCase())
-  if (!booking) return <NotFound refText={ref} />
+
+  // Not in this session's data yet (e.g. just created by another user): fetch once before saying "not found"
+  useEffect(() => {
+    if (booking || refreshed) return
+    refresh().finally(() => setRefreshed(true))
+  }, [booking, refreshed, refresh])
+
+  // "Add expense" from the bookings list (in-house rows) opens the popup straight away
+  useEffect(() => {
+    if (!booking || search.get('add') !== 'expense') return
+    if (booking.status === 'checked in' && can(user, 'edit_bookings')) setPopup({ kind: 'expense' })
+    search.delete('add')
+    setSearch(search, { replace: true })
+  }, [booking, search, setSearch, user])
+
+  if (!booking) {
+    if (!refreshed) return <div className="flex min-h-[40vh] items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-emerald-700" /></div>
+    return <NotFound refText={ref} />
+  }
   const b = booking
 
   const canEdit = can(user, 'edit_bookings')
