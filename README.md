@@ -44,6 +44,27 @@ and PHP's built-in server with `.localrun/router.php`:
 - Website: http://localhost:8090/
 - Admin: http://localhost:8090/admin/
 
+## Run locally (macOS / Linux)
+
+Needs Node.js, PHP 8.1+ with `pdo_mysql`, and MySQL 8+
+(Homebrew: `brew install node php mysql`). Then, from the repo root:
+
+```bash
+./start-resoria.sh
+```
+
+The first run builds the admin and the website, creates a local MySQL
+(port 3317, data in `.localrun/mysql-data`, separate from any MySQL you
+already run), writes `api/config.php` and runs the installer. Later runs only
+start the servers. It serves on http://localhost:8090/ (or the next free port)
+and Ctrl+C stops it. `./start-resoria.sh --build` rebuilds both apps first;
+`PORT=8095 ./start-resoria.sh` picks the port.
+
+Local login: `admin@resoria.co` with the demo password from
+`source/server/install.php`.
+
+## Dev servers
+
 For quick admin work, `cd source && npm run dev` serves the admin at
 http://localhost:5173/admin/, and `cd source/website && npm run dev` serves
 the website at http://localhost:3050.
