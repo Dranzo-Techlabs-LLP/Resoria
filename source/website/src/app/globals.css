@@ -1917,3 +1917,342 @@ ol {
   padding-top: 14px;
   border-top: 2px solid var(--gold);
 }
+
+/* ================================================================== */
+/*  Presentation pass (ui-ux-pro-max): booking card, hero facts,       */
+/*  amenities, unit cards, section rules, richer footer, a11y fixes.   */
+/* ================================================================== */
+
+/* ---------- skip link (keyboard users jump past the nav) ---------- */
+
+.skip-link {
+  position: absolute;
+  left: 16px;
+  top: -100px;
+  z-index: 100;
+  padding: 12px 18px;
+  border-radius: 8px;
+  background: var(--forest);
+  color: var(--paper);
+  font-weight: 600;
+  transition: top 0.2s var(--ease);
+}
+
+.skip-link:focus {
+  top: 16px;
+}
+
+/* ---------- section titles: a short gold rule above each ---------- */
+
+.section-title::before {
+  content: "";
+  display: block;
+  width: 48px;
+  height: 2px;
+  margin-bottom: 22px;
+  background: var(--gold);
+}
+
+/* ---------- hero: the stay at a glance ---------- */
+
+.hero-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  max-width: 40rem;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+  font-size: 0.95rem;
+}
+
+.hero-facts li {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hero-facts svg {
+  flex: none;
+  color: var(--gold-deep);
+}
+
+.hero-panel > :nth-child(5) {
+  animation-delay: 0.75s;
+}
+
+/* ---------- booking strip: a raised card with real 48px fields ---------- */
+
+.strip {
+  position: relative;
+  z-index: 3;
+  padding: 20px 0 4px;
+  border: 0;
+  background: var(--shell);
+}
+
+.strip-form {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: calc(var(--maxw) - 2 * var(--gutter));
+  margin-inline: auto;
+  gap: 0 12px;
+  padding: 8px 18px 4px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: 0 18px 40px -26px rgba(22, 36, 30, 0.45);
+}
+
+.strip-field {
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 0;
+}
+
+.strip-field label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.strip-field label svg {
+  color: var(--gold-deep);
+}
+
+.strip-field input,
+.strip-field select {
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 1rem;
+  transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.strip-field input:focus-visible,
+.strip-field select:focus-visible {
+  outline: none;
+  border-color: var(--forest);
+  box-shadow: 0 0 0 3px rgba(23, 64, 46, 0.18);
+}
+
+.strip-submit {
+  padding-block: 12px 14px;
+}
+
+.strip-submit .btn {
+  min-height: 48px;
+}
+
+@media (min-width: 900px) {
+  .strip {
+    padding: 0;
+    background: transparent;
+  }
+  .strip-form {
+    margin-top: -44px;
+    grid-template-columns: 1fr 1fr 0.8fr auto;
+    align-items: end;
+    column-gap: 16px;
+    padding: 6px 16px 6px 24px;
+  }
+  .strip-field {
+    padding-block: 14px;
+  }
+  .strip-field + .strip-field {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .strip-submit {
+    align-self: end;
+    padding-block: 14px;
+  }
+}
+
+/* ---------- around the grounds ---------- */
+
+.amenities {
+  padding-block: var(--band);
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.amenities-head {
+  display: grid;
+  gap: 20px;
+  margin-bottom: clamp(36px, 5vw, 64px);
+}
+
+.amenities-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
+  gap: 16px;
+}
+
+.amenity {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 26px 24px 24px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--shell);
+  transition: border-color 0.25s var(--ease), box-shadow 0.25s var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .amenity:hover {
+    border-color: var(--gold);
+    box-shadow: 0 16px 32px -24px rgba(22, 36, 30, 0.5);
+  }
+}
+
+.amenity-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 6px;
+  border: 1px solid var(--gold);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--forest);
+}
+
+.amenity-title {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 1.45rem;
+  line-height: 1.15;
+}
+
+.amenity-text {
+  max-width: 34ch;
+  color: var(--stone);
+  font-size: 0.975rem;
+}
+
+@media (min-width: 900px) {
+  .amenities-head {
+    grid-template-columns: 1fr 1fr;
+    align-items: end;
+  }
+}
+
+/* ---------- villa / suite names: numbered cards ---------- */
+
+.units-list .unit {
+  display: grid;
+  gap: 4px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--rule);
+  border-top: 2px solid var(--gold);
+  border-radius: 12px;
+  background: var(--shell);
+}
+
+.stays-more .units-list .unit {
+  background: var(--paper);
+}
+
+.unit-index {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+  color: var(--gold-deep);
+}
+
+/* ---------- enquiry form labels: readable size ---------- */
+
+.field label {
+  font-size: 0.9rem;
+}
+
+/* ---------- footer: brand, explore, contact ---------- */
+
+.footer {
+  padding-block: clamp(48px, 6vw, 72px) 32px;
+}
+
+.footer-grid {
+  display: grid;
+  gap: 36px;
+}
+
+.footer-tagline {
+  max-width: 22ch;
+  margin: 18px 0 22px;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  line-height: 1.25;
+  color: var(--gold);
+}
+
+.footer-heading {
+  margin-bottom: 4px;
+  font-family: var(--font-body);
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.footer-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.footer-col a {
+  padding-block: 10px;
+  opacity: 0.9;
+  transition: opacity 0.2s var(--ease);
+}
+
+.footer-col a:hover {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.footer-contact {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.footer-small {
+  padding-top: 22px;
+  border-top: 1px solid var(--rule-gold);
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
+@media (min-width: 900px) {
+  .footer-grid {
+    grid-template-columns: 1.4fr 1fr 1fr;
+    align-items: start;
+  }
+  .footer-small {
+    grid-column: 1 / -1;
+  }
+}
+
+/* even rows of tiles: 2 across on tablets, 3 on desktop (6 tiles = 3 x 2) */
+@media (min-width: 600px) {
+  .amenities-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .amenities-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  /* room under the hero's facts for the booking card that overlaps it */
+  .hero-panel {
+    padding-bottom: 96px;
+  }
+}

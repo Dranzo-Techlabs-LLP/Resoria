@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { CalendarDays, Users } from "lucide-react";
 
 export interface Prefill {
   checkIn: string;
@@ -42,7 +43,10 @@ export default function BookingStrip() {
     <section className="strip" aria-label="Check availability">
       <form className="wrap strip-form" onSubmit={onSubmit} data-testid="booking-strip">
         <div className="strip-field">
-          <label htmlFor="strip-in">Check-in</label>
+          <label htmlFor="strip-in">
+            <CalendarDays size={15} strokeWidth={1.7} aria-hidden="true" />
+            Check-in
+          </label>
           <input
             id="strip-in"
             type="date"
@@ -54,7 +58,10 @@ export default function BookingStrip() {
           />
         </div>
         <div className="strip-field">
-          <label htmlFor="strip-out">Check-out</label>
+          <label htmlFor="strip-out">
+            <CalendarDays size={15} strokeWidth={1.7} aria-hidden="true" />
+            Check-out
+          </label>
           <input
             id="strip-out"
             type="date"
@@ -64,7 +71,10 @@ export default function BookingStrip() {
           />
         </div>
         <div className="strip-field">
-          <label htmlFor="strip-guests">Guests</label>
+          <label htmlFor="strip-guests">
+            <Users size={15} strokeWidth={1.7} aria-hidden="true" />
+            Guests
+          </label>
           <select id="strip-guests" value={guests} onChange={(e) => setGuests(e.target.value)}>
             {GUEST_OPTIONS.map((n) => (
               <option key={n} value={String(n)}>

@@ -42,6 +42,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('js')" }} />
       </head>
       <body>
+        <a href="#top" className="skip-link">
+          Skip to content
+        </a>
         <Navbar />
         {children}
         <WhatsAppFloat />

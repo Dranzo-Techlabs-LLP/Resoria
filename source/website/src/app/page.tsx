@@ -1,6 +1,7 @@
 import Hero from "@/components/Hero";
 import BookingStrip from "@/components/BookingStrip";
 import About from "@/components/About";
+import Amenities from "@/components/Amenities";
 import MistSection from "@/components/mist/MistSection";
 import Stays from "@/components/Stays";
 import Conference from "@/components/Conference";
@@ -16,6 +17,7 @@ export default function Home() {
         <Hero />
         <BookingStrip />
         <About />
+        <Amenities />
         <MistSection />
         <Stays />
         <Conference />

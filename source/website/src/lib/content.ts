@@ -150,6 +150,23 @@ export const events = {
 /** Around the grounds: shown in the About facts. */
 export const facilities = ["Infinity pool", "Kids' park", "DJ hall", "Conference hall"];
 
+/** "Around the grounds": one tile each, with a Lucide icon (see Amenities.tsx). */
+export const amenities = [
+  { icon: "waves", title: "Private pool villas", text: "Haven and Solace each open onto a pool of their own." },
+  { icon: "droplets", title: "Waterfall views", text: "Elysian, Sylvane and Zephyr look out on the falls." },
+  { icon: "sun", title: "Infinity pool", text: "Open to every guest at the resort." },
+  { icon: "baby", title: "Kids' park", text: "Room for children to play on the grounds." },
+  { icon: "music", title: "DJ Hall", text: "For parties, receptions and celebrations." },
+  { icon: "presentation", title: "Conference Hall", text: "For meetings, offsites and training days." },
+] as const;
+
+/** Under the hero's buttons: the stay at a glance. */
+export const heroFacts = [
+  { icon: "waves", text: "2 private pool villas" },
+  { icon: "droplets", text: "3 waterfall suites" },
+  { icon: "users", text: "Groups up to 60" },
+] as const;
+
 // The "in the mist" section between About and Stays. The three lines
 // crossfade as the morning cloud sinks into the valley below the villa.
 export const mist = {

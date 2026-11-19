@@ -39,8 +39,11 @@ function StayItem({ stay }: { stay: Stay }) {
       {stay.units && (
         <div className="units">
           <ul className="units-grid units-list" aria-label={stay.name}>
-            {stay.units.map((u) => (
+            {stay.units.map((u, i) => (
               <li key={u.id} className="unit">
+                <span className="unit-index" aria-hidden="true">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
                 <h4 className="unit-name">{u.name}</h4>
                 <p className="unit-note">{u.note}</p>
               </li>

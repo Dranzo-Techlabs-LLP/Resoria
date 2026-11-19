@@ -1,5 +1,6 @@
 import Photo from "./Photo";
-import { images, site } from "@/lib/content";
+import { ICONS } from "./Amenities";
+import { heroFacts, images, site } from "@/lib/content";
 
 export default function Hero() {
   return (
@@ -29,6 +30,17 @@ export default function Hero() {
             See the stays
           </a>
         </div>
+        <ul className="hero-facts" aria-label="At a glance">
+          {heroFacts.map((f) => {
+            const Icon = ICONS[f.icon];
+            return (
+              <li key={f.text}>
+                <Icon size={18} strokeWidth={1.6} aria-hidden="true" />
+                {f.text}
+              </li>
+            );
+          })}
+        </ul>
       </div>
       <div className="hero-media">
         {/* Taller than the frame; ScrollMotion drifts it for depth as the page scrolls */}
