@@ -40,8 +40,11 @@ ErrorDocument 404 /404.html
   RewriteRule ^(login|calendar|bookings|accounting|expenses|reports|rooms|users|roles|invoice)(/.*)?$ /admin/$1$2 [R=302,L]
 
   # A page that Next also exported as a folder (e.g. /feedback → feedback.html next to
-  # feedback/): serve the page, not the folder (which would redirect, then 403)
-  RewriteCond %{REQUEST_FILENAME}.html -f
+  # feedback/): serve the page, not the folder (which would redirect, then 403).
+  # Looked up from the document root, not REQUEST_FILENAME: Apache adds the slash
+  # first (/feedback -> /feedback/), and for that request REQUEST_FILENAME.html is
+  # "feedback/.html", which never exists.
+  RewriteCond %{DOCUMENT_ROOT}/$1.html -f
   RewriteRule ^(.+?)/?$ $1.html [L]
   # Serve real files and directories as-is
   RewriteCond %{REQUEST_FILENAME} -f [OR]
