@@ -1204,7 +1204,12 @@ function appFigures(data: AppData, m: ManagementModel) {
     } else if (inRange(e.date)) operating += e.amount
   }
   const contracted = sum(data.bookings.filter((b) => (m.villa === ALL_ROOMS || primaryRoom(b.villa) === m.villa) && b.status !== 'cancelled' && inRange(b.checkIn)), (b) => b.total)
-  const unlisted = sum(data.expenses.filter((e) => e.category !== B2B_CATEGORY && inRange(e.date) && villaOk(e.villa) && !list.has(primaryRoom(e.villa))), (e) => e.amount)
+  let unlisted = sum(data.expenses.filter((e) => e.category !== B2B_CATEGORY && inRange(e.date) && villaOk(e.villa) && !list.has(primaryRoom(e.villa))), (e) => e.amount)
+  // Under All rooms the Accounting page shows these on a "General (no room)" row, so they're in its totals
+  if (m.villa === ALL_ROOMS) {
+    operating += unlisted
+    unlisted = 0
+  }
   return {
     credited, cash, bank: credited - cash, refunded,
     bookingsTotal: sum(stays, (b) => b.total), bookingsPaid: sum(stays, (b) => paidOf(b)), expensesTotal,

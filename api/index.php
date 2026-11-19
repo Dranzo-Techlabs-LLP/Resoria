@@ -204,6 +204,7 @@ try {
     require_right($me, 'edit_bookings');
     $b = body();
     $f = $bookingFields($b);
+    assert_room_names($f['villa']);
     $status = in_array($b['status'] ?? 'confirmed', ['enquiry', 'hold', 'confirmed'], true) ? ($b['status'] ?? 'confirmed') : 'confirmed';
     $advance = (int)round((float)($b['advance'] ?? 0));
     if ($advance < 0) fail('The advance cannot be negative.');
@@ -260,6 +261,8 @@ try {
     if (in_array($cur['status'], ['completed', 'cancelled'], true)) fail('Completed and cancelled bookings are read-only.');
     $b = body();
     $f = $bookingFields($b, $cur);
+    // Bookings made before a room-list change keep their old room name until it is changed here
+    if ($f['villa'] !== $cur['villa']) assert_room_names($f['villa']);
     if ($cur['status'] === 'checked in' && $f['check_in'] !== $cur['check_in']) fail("The guest has checked in, so the check-in date can't change.");
     $status = $cur['status'];
     if (isset($b['status']) && is_pre_arrival($cur['status']) && in_array($b['status'], ['enquiry', 'hold', 'confirmed'], true)) $status = $b['status'];
@@ -346,6 +349,11 @@ try {
     require_right($me, 'edit_bookings');
     $cur = booking_row($seg[1]);
     if (!is_pre_arrival($cur['status'])) fail('Only a confirmed booking can be checked in.');
+    if (date('Y-m-d') < $cur['check_in']) {
+      fail('This stay starts on ' . date('j M Y', strtotime($cur['check_in'])) . '. If the guest has arrived early, change the check-in date first.');
+    }
+    // An enquiry never held its rooms, so make sure nobody else has them before the guest moves in
+    if ($cur['status'] === 'enquiry') assert_rooms_free($cur['villa'], $cur['check_in'], $cur['check_out'], $cur['ref']);
     $due = room_balance($cur);
     if ($due > 0) fail('Collect the remaining ' . inr($due) . ' before check-in.');
     db()->prepare("UPDATE bookings SET status = 'checked in', checked_in_at = ? WHERE ref = ?")->execute([now_dt(), $cur['ref']]);
@@ -401,10 +409,8 @@ try {
     $purpose = ($b['purpose'] ?? 'room') === 'extras' ? 'extras' : 'room';
     $advance = !empty($b['advance']) && $kind === 'payment' && $purpose === 'room';
     if ($kind === 'refund') {
-      $st = db()->prepare("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE booking_ref = ? AND kind = 'refund'");
-      $st->execute([$cur['ref']]);
-      $max = room_received($cur['ref']) - (int)($cur['cancellation_charge'] ?? 0) - (int)$st->fetchColumn();
-      if ($cur['status'] === 'cancelled' && $amount > $max) fail('The refund cannot be more than the ' . inr(max(0, $max)) . ' still refundable.');
+      $max = refundable($cur);
+      if ($amount > $max) fail('The refund cannot be more than the ' . inr(max(0, $max)) . ' still refundable.');
     }
     db()->prepare('INSERT INTO payments (id, booking_ref, date, amount, kind, method, reference, is_advance, purpose, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
         ->execute([gen_id('p'), $cur['ref'], $date, $amount, $kind, $m ?: null, (trim((string)($b['reference'] ?? '')) ?: null), $advance ? 1 : 0, $purpose, now_dt()]);
@@ -424,6 +430,9 @@ try {
     if (!$row) fail('Payment not found.', 404);
     if (($row['purpose'] ?? 'room') === 'extras') fail('This payment settles additional expenses; it can’t be changed.');
     if ($method === 'DELETE') {
+      if ($row['kind'] === 'payment' && refundable(booking_row($row['booking_ref']), $row['id']) < 0) {
+        fail('Refunds already paid on this booking come to more than the payments left without this one. Remove the refund first.');
+      }
       db()->prepare('DELETE FROM payments WHERE id = ?')->execute([$seg[1]]);
       add_event($row['booking_ref'], 'Payment entry of ' . inr((int)$row['amount']) . ' removed');
     } else {
@@ -431,9 +440,12 @@ try {
       $kind = ($b['kind'] ?? 'payment') === 'refund' ? 'refund' : 'payment';
       $amount = (int)round((float)($b['amount'] ?? 0));
       if ($amount <= 0) fail('Enter an amount greater than ₹0.');
+      $left = refundable(booking_row($row['booking_ref']), $row['id']); // with this line left out
+      if ($kind === 'refund' && $amount > $left) fail('The refund cannot be more than the ' . inr(max(0, $left)) . ' still refundable.');
+      if ($kind === 'payment' && $left + $amount < 0) fail('Refunds already paid come to more than this; the payment must be at least ' . inr(-$left) . '.');
       db()->prepare('UPDATE payments SET date = ?, amount = ?, kind = ?, method = ?, reference = ?, is_advance = ? WHERE id = ?')
           ->execute([valid_date($b['date'] ?? date('Y-m-d')), $amount, $kind,
-                     ($b['method'] ?? '') ?: null, ($b['reference'] ?? '') ?: null,
+                     $methodOf($b['method'] ?? '') ?: null, mb_substr(trim((string)($b['reference'] ?? '')), 0, 120) ?: null,
                      (!empty($b['advance']) && $kind === 'payment') ? 1 : 0, $seg[1]]);
       add_event($row['booking_ref'], 'Payment entry edited: ' . inr($amount));
     }
@@ -537,7 +549,7 @@ try {
     if (!is_numeric($min) || (float)$min < 0) fail('Enter a minimum stock level of 0 or more.');
     $dup = db()->prepare('SELECT id FROM inventory_items WHERE LOWER(TRIM(name)) = LOWER(?) AND LOWER(unit) = LOWER(?) AND id <> ?');
     $dup->execute([$name, $unit, $cur['id'] ?? '']);
-    if ($dup->fetch()) fail("“$name” ($unit) already exists.");
+    if ($dup->fetch()) fail("“{$name}” ({$unit}) already exists.");
     return ['name' => $name, 'category' => $cat, 'unit' => $unit, 'min_stock' => f2($min),
             'active' => array_key_exists('active', $b) ? (int)!!$b['active'] : (int)($cur['active'] ?? 1),
             'reusable' => array_key_exists('reusable', $b) ? (int)!!$b['reusable'] : (int)($cur['reusable'] ?? 0)];
@@ -668,6 +680,25 @@ try {
   }
 
   // ---------- Expenses ----------
+  // Date, category and amount are checked here so a bad entry is a clear message, not a database error
+  $expenseCheck = function (array $row): array {
+    $row['date'] = valid_date($row['date']);
+    $row['category'] = mb_substr(trim((string)$row['category']), 0, 60);
+    if ($row['category'] === '') fail('Choose a category.');
+    $row['villa'] = mb_substr(trim((string)$row['villa']), 0, 255);
+    $row['description'] = mb_substr(trim((string)$row['description']), 0, 255);
+    if ($row['amount'] <= 0 || $row['amount'] > 100000000) fail('Enter an amount greater than ₹0.');
+    return $row;
+  };
+  // Expenses booked by a stock purchase follow that purchase (its payments update them)
+  $expenseRow = function (string $id): array {
+    $st = db()->prepare('SELECT * FROM expenses WHERE id = ?');
+    $st->execute([$id]);
+    $cur = $st->fetch() ?: fail('Expense not found.', 404);
+    if (!empty($cur['source_ref'])) fail("This expense was created by inventory purchase {$cur['source_ref']}, so it can't be changed or removed here.");
+    return $cur;
+  };
+
   if ($method === 'POST' && $path === 'expenses') {
     require_right($me, 'edit_expenses');
     $b = body();
@@ -677,7 +708,7 @@ try {
       'villa' => $b['villa'] ?? '', 'bookingRef' => ($b['bookingRef'] ?? '') ?: null,
       'description' => $b['description'] ?? '', 'amount' => (int)round((float)($b['amount'] ?? 0)),
     ];
-    $row = normalize_expense_link($row);
+    $row = normalize_expense_link($expenseCheck($row));
     // "Collected externally" only applies to a B2B commission; the column is only touched when it is sent,
     // so ordinary expenses keep saving before the migration has been run.
     if (array_key_exists('external', $b) && !is_bool($b['external'])) fail('Invalid option.');
@@ -702,10 +733,7 @@ try {
   // Edit an expense in place (fields left out keep their current value)
   if ($method === 'PUT' && count($seg) === 2 && $seg[0] === 'expenses') {
     require_right($me, 'edit_expenses');
-    $st = db()->prepare('SELECT * FROM expenses WHERE id = ?');
-    $st->execute([$seg[1]]);
-    $cur = $st->fetch();
-    if (!$cur) fail('Expense not found.', 404);
+    $cur = $expenseRow($seg[1]);
     $b = body();
     $row = [
       'id'          => $cur['id'],
@@ -716,7 +744,7 @@ try {
       'description' => $b['description'] ?? $cur['description'],
       'amount'      => array_key_exists('amount', $b) ? (int)round((float)$b['amount']) : (int)$cur['amount'],
     ];
-    $row = normalize_expense_link($row);
+    $row = normalize_expense_link($expenseCheck($row));
     if (array_key_exists('external', $b) && !is_bool($b['external'])) fail('Invalid option.');
     $wasExternal = (int)($cur['external'] ?? 0) === 1;
     $row['external'] = $row['category'] === 'B2B Commission'
@@ -734,7 +762,8 @@ try {
 
   if ($method === 'DELETE' && count($seg) === 2 && $seg[0] === 'expenses') {
     require_right($me, 'edit_expenses');
-    db()->prepare('DELETE FROM expenses WHERE id = ?')->execute([$seg[1]]);
+    $cur = $expenseRow($seg[1]);
+    db()->prepare('DELETE FROM expenses WHERE id = ?')->execute([$cur['id']]);
     json_out(['ok' => true]);
   }
 
@@ -807,16 +836,33 @@ try {
     require_right($me, 'manage_users');
     $b = body();
     $id = gen_id('r');
-    $name = trim($b['name'] ?? '') ?: 'New role';
+    $name = mb_substr(trim((string)($b['name'] ?? '')), 0, 60) ?: 'New role';
+    if (role_exists($name)) fail("A role called “{$name}” already exists.");
     db()->prepare('INSERT INTO roles (id, name, `system`, rights) VALUES (?,?,0,?)')->execute([$id, $name, json_encode([])]);
     json_out(['role' => ['id' => $id, 'name' => $name, 'system' => false, 'rights' => []]], 201);
   }
 
   if ($method === 'PATCH' && count($seg) === 2 && $seg[0] === 'roles') {
     require_right($me, 'manage_users');
+    $st = db()->prepare('SELECT * FROM roles WHERE id = ?');
+    $st->execute([$seg[1]]);
+    $role = $st->fetch() ?: fail('Role not found.', 404);
     $b = body();
-    $rights = is_array($b['rights'] ?? null) ? array_values($b['rights']) : [];
-    db()->prepare('UPDATE roles SET rights = ? WHERE id = ?')->execute([json_encode($rights), $seg[1]]);
+    if (!is_array($b['rights'] ?? null)) fail('Send the rights as a list.');
+    $rights = array_values(array_unique(array_map('strval', $b['rights'])));
+    $unknown = array_diff($rights, ALL_RIGHTS);
+    if ($unknown) fail('Unknown right: ' . implode(', ', $unknown) . '.');
+    // Never lock everyone out: some active user must still be able to manage users afterwards
+    if (!in_array('manage_users', $rights, true)) {
+      $others = db()->prepare('SELECT role FROM users WHERE active = 1 AND role <> ?');
+      $others->execute([$role['name']]);
+      $still = false;
+      foreach ($others->fetchAll() as $u) {
+        if (in_array('manage_users', role_rights($u['role']), true)) { $still = true; break; }
+      }
+      if (!$still) fail("Without “Add / edit users & rights” on {$role['name']}, no active user could manage users. Give that right to another active user's role first.");
+    }
+    db()->prepare('UPDATE roles SET rights = ? WHERE id = ?')->execute([json_encode($rights), $role['id']]);
     json_out(['ok' => true]);
   }
 
@@ -829,6 +875,19 @@ try {
     $next    = isset($b['next'])    ? (int)$b['next']    : (int)$cur['next'];
     $padding = isset($b['padding']) ? (int)$b['padding'] : (int)$cur['padding'];
     $terms   = $b['terms']   ?? $cur['terms'];
+    if (!is_string($prefix) || !preg_match('/^[A-Za-z0-9\/-]{0,12}$/', $prefix)) fail('Use up to 12 letters, digits, - or / for the prefix.');
+    if ($padding < 1 || $padding > 10) fail('Digits must be between 1 and 10.');
+    if ($next < 1 || $next > 999999999) fail('Enter a next number of 1 or more.');
+    if (!is_string($terms) || mb_strlen($terms) > 20000) fail('The terms are too long.');
+    // The series must never hand out a number a booking already has
+    $used = db()->prepare('SELECT ref FROM bookings WHERE ref LIKE ?');
+    $used->execute([str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $prefix) . '%']);
+    $max = 0;
+    foreach ($used->fetchAll() as $r) {
+      $rest = substr($r['ref'], strlen($prefix));
+      if ($rest !== '' && ctype_digit($rest)) $max = max($max, (int)$rest);
+    }
+    if ($next <= $max) fail('Booking numbers up to ' . $prefix . str_pad((string)$max, $padding, '0', STR_PAD_LEFT) . ' are already used. Set the next number to ' . ($max + 1) . ' or more.');
     // "Show on invoice" options: only touched when sent, so the other settings save without them
     $withShow = array_key_exists('showPayments', $b) || array_key_exists('showB2b', $b);
     $show = [];

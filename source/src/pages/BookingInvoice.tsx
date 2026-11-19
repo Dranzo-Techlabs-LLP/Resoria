@@ -57,8 +57,14 @@ export function BookingInvoice() {
 
   // The invoice never mentions B2B: the full total, and everything paid (including what a booking partner collected)
   const partnerPaid = booking.b2bExternal ?? 0
-  const paid = paidOf(booking) + partnerPaid
-  const balance = balanceOf(booking)
+  // Additional expenses (food, hall, services) are billed on the same invoice as the room, with
+  // their collections counted as paid, so the totals match the payments listed below.
+  const charges = booking.charges ?? []
+  const chargesTotal = charges.reduce((s, c) => s + c.total, 0)
+  const extrasPaid = booking.payments.filter((p) => p.kind === 'payment' && p.purpose === 'extras').reduce((s, p) => s + p.amount, 0)
+  const total = booking.total + chargesTotal
+  const paid = paidOf(booking) + partnerPaid + extrasPaid
+  const balance = balanceOf(booking) + Math.max(0, chargesTotal - extrasPaid)
   const nightCount = nights(booking.checkIn, booking.checkOut)
   const issued = fmtDate(toISO(new Date()))
   const terms = data.invoice.terms
@@ -120,6 +126,12 @@ export function BookingInvoice() {
               <td className="py-3 text-slate-700">Room {booking.villa} · {nightCount} night{nightCount > 1 ? 's' : ''} · {booking.source}</td>
               <td className="nums py-3 text-right text-slate-900">{formatINR(booking.total)}</td>
             </tr>
+            {charges.map((c) => (
+              <tr key={c.id} className="border-b border-slate-100">
+                <td className="py-3 text-slate-700">{c.category} · {c.item}{c.qty > 1 ? ` × ${c.qty}` : ''}</td>
+                <td className="nums py-3 text-right text-slate-900">{formatINR(c.total)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
 
@@ -140,7 +152,7 @@ export function BookingInvoice() {
                 {payments.map((p) => (
                   <tr key={p.id} className="border-b border-slate-100">
                     <td className="nums py-2 text-slate-700">{fmtDate(p.date)}</td>
-                    <td className="py-2 capitalize text-slate-700">{p.advance ? 'advance' : p.kind}</td>
+                    <td className="py-2 capitalize text-slate-700">{p.advance ? 'advance' : p.purpose === 'extras' ? 'additional expenses' : p.kind}</td>
                     <td className="py-2 text-slate-700">{p.method || '—'}</td>
                     <td className="py-2 text-slate-700">{p.reference || '—'}</td>
                     <td className="nums py-2 text-right text-slate-900">{p.kind === 'refund' ? '−' : ''}{formatINR(p.amount)}</td>
@@ -161,7 +173,7 @@ export function BookingInvoice() {
         )}
 
         <div className="ml-auto mt-4 w-full max-w-xs">
-          <Row label="Total" value={formatINR(booking.total)} />
+          <Row label="Total" value={formatINR(total)} />
           <Row label="Paid" value={formatINR(paid)} />
           <div className="mt-1 border-t border-slate-200 pt-1">
             <Row label="Balance due" value={formatINR(balance)} strong />

@@ -6,7 +6,7 @@ import {
   chargesDue, fmtDateTime, fmtDateTimeShort, isCancelled, isCompleted, isInHouse, isPreArrival, refundInfo, roomBalance,
   roomLabel, sourceLine, statusLabel,
 } from '../lib/booking'
-import { fmtDate, formatINR } from '../lib/format'
+import { fmtDate, formatINR, toISO } from '../lib/format'
 import { PageTitle } from '../components/ui/PageTitle'
 import { Pill, StatusTag } from '../components/ui/Pill'
 import { useToast } from '../components/ui/Toast'
@@ -119,6 +119,8 @@ export function BookingDetail() {
   const billsTo = `/bookings/${enc(b.ref)}/bills`
   const guestRef = `${b.guest} · ${b.ref}`
   const showExpenses = inHouse || done || (b.charges ?? []).length > 0
+  // A stay can't start before its check-in date (today is read fresh, so a tab left open overnight is right)
+  const early = b.checkIn > toISO(new Date())
 
   // ---- Header actions (by stage and rights) ----
   let actions: ReactNode = null
@@ -130,17 +132,19 @@ export function BookingDetail() {
         {canCancel && <button type="button" onClick={() => setPopup({ kind: 'cancel' })} className={outlineDangerBtnCls}>Cancel</button>}
         {canCancel && <button type="button" onClick={() => setPopup({ kind: 'delete' })} className={outlineDangerBtnCls}>Delete</button>}
         {canEdit && (
-          <button type="button" onClick={() => setPopup({ kind: 'checkIn' })} disabled={balance > 0} className={solidBtnCls}
-            title={balance > 0 ? 'Check-in unlocks once the full booking amount is received' : undefined}>
+          <button type="button" onClick={() => setPopup({ kind: 'checkIn' })} disabled={balance > 0 || early} className={solidBtnCls}
+            title={early ? `Check-in opens on ${fmtDate(b.checkIn)}` : balance > 0 ? 'Check-in unlocks once the full booking amount is received' : undefined}>
             Check-in
           </button>
         )}
       </>
     )
     if (canEdit) {
-      note = balance > 0
-        ? <span className="text-due">Check-in unlocks when the <span className="nums">{formatINR(balance)}</span> balance is received</span>
-        : <span className="text-ok">Fully paid · ready for check-in</span>
+      note = early
+        ? <span className="text-due">Check-in opens on {fmtDate(b.checkIn)}. If the guest arrives early, edit the check-in date first.</span>
+        : balance > 0
+          ? <span className="text-due">Check-in unlocks when the <span className="nums">{formatINR(balance)}</span> balance is received</span>
+          : <span className="text-ok">Fully paid · ready for check-in</span>
     }
   } else if (inHouse) {
     const blocked = due > 0 || balance > 0

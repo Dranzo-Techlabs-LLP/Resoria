@@ -6,6 +6,8 @@ import { inputCls, refCardCls, selectCls, thCls, thRightCls } from '../component
 import { PageTitle } from '../components/ui/PageTitle'
 import { VillaDot } from '../components/ui/VillaDot'
 
+const GENERAL_ROW = 'General (no room)'
+
 function Kpi({ label, value, sub, tone }: { label: string; value: string; sub: string; tone: 'green' | 'orange' | 'red' }) {
   const color = tone === 'green' ? 'text-emerald-700' : tone === 'red' ? 'text-red-600' : 'text-amber-600'
   return (
@@ -56,6 +58,17 @@ export function Accounting() {
       const revenue = collected - refunded - b2b
       return { villa: v, collected, roomCollected, extrasCollected, refunded, b2b, b2bExt, operating, bookings, revenue, profit: revenue - operating }
     })
+    // Expenses with no room (stock purchases, repairs, salaries…) belong to the whole resort: under
+    // All rooms they get a row of their own, so the totals and the profit include them.
+    if (villa === 'All rooms') {
+      const listed = new Set(villaList)
+      const general = data.expenses
+        .filter((e) => !listed.has(primaryRoom(e.villa)) && e.category !== B2B_CATEGORY && inRange(e.date))
+        .reduce((s, e) => s + e.amount, 0)
+      if (general > 0) {
+        perVilla.push({ villa: GENERAL_ROW, collected: 0, roomCollected: 0, extrasCollected: 0, refunded: 0, b2b: 0, b2bExt: 0, operating: general, bookings: 0, revenue: 0, profit: -general })
+      }
+    }
 
     const sum = (f: (r: (typeof perVilla)[number]) => number) => perVilla.reduce((s, r) => s + f(r), 0)
     const collected = sum((r) => r.collected)
@@ -127,7 +140,7 @@ export function Accounting() {
             <tbody className="divide-y divide-slate-100">
               {model.perVilla.map((r) => (
                 <tr key={r.villa} className="hover:bg-slate-50">
-                  <td className="px-5 py-3"><span className="inline-flex items-center gap-2 font-medium text-slate-900"><VillaDot villa={r.villa} />{r.villa}</span></td>
+                  <td className="px-5 py-3"><span className="inline-flex items-center gap-2 font-medium text-slate-900">{r.villa !== GENERAL_ROW && <VillaDot villa={r.villa} />}{r.villa}</span></td>
                   <td className="nums px-5 py-3 text-right font-semibold text-emerald-700">{formatINR(r.revenue)}</td>
                   <td className="nums px-5 py-3 text-right text-amber-600">{formatINR(r.operating)}</td>
                   <td className="nums px-5 py-3 text-right font-semibold text-emerald-700">{formatINR(r.profit)}</td>

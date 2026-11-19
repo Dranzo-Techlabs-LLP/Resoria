@@ -19,6 +19,13 @@ const CAPACITY_ROOMS = [
   'Haven', 'Elysian', 'Solace', 'Sylvane', 'Zephyr', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Dorm 1', 'Dorm 2', 'Party Hall',
 ];
 
+// Every right a role can hold (same list as the admin's Roles & Rights checklist, src/lib/permissions.ts)
+const ALL_RIGHTS = [
+  'view_payments', 'record_payments', 'view_expenses', 'edit_expenses', 'view_accounting', 'view_users', 'manage_users',
+  'edit_invoice', 'view_bookings', 'edit_bookings', 'cancel_bookings', 'view_calendar', 'view_dashboard', 'view_reports',
+  'view_villas', 'edit_villas', 'view_inventory', 'edit_inventory', 'manage_config', 'view_ratings', 'manage_ratings',
+];
+
 // Times are stored in the resort's local time (India)
 if (!ini_get('date.timezone') || date_default_timezone_get() === 'UTC') date_default_timezone_set('Asia/Kolkata');
 
@@ -671,13 +678,23 @@ function upload_dir(): string {
 }
 
 /** Validates and stores a {name, type, data(base64)} upload. Returns [displayName, storedFileName]. */
+/** The file's real type from its first bytes: 'pdf', 'jpg', 'png', 'webp', or null for anything else.
+ *  Read from the signature itself rather than with finfo, so uploads work on hosts whose PHP
+ *  doesn't load the fileinfo extension (without it, every booking with an ID proof failed). */
+function upload_type(string $bytes): ?string {
+  if (strncmp($bytes, '%PDF-', 5) === 0) return 'pdf';
+  if (strncmp($bytes, "\xFF\xD8\xFF", 3) === 0) return 'jpg';
+  if (strncmp($bytes, "\x89PNG\r\n\x1A\n", 8) === 0) return 'png';
+  if (strncmp($bytes, 'RIFF', 4) === 0 && substr($bytes, 8, 4) === 'WEBP') return 'webp';
+  return null;
+}
+
 function store_upload($file, string $prefix): array {
   if (!is_array($file) || !isset($file['data'], $file['name'])) fail('The attached file is missing.');
   $bytes = base64_decode((string)$file['data'], true);
   if ($bytes === false || $bytes === '') fail('The attached file could not be read.');
   if (strlen($bytes) > 5 * 1024 * 1024) fail('The attached file is larger than 5 MB.');
-  $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes) ?: '';
-  $ext = ['application/pdf' => 'pdf', 'image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'][$mime] ?? null;
+  $ext = upload_type($bytes);
   if (!$ext) fail('Attach a PDF, JPG, PNG or WEBP file.');
   $name = trim(preg_replace('/[^\w .()\-]+/u', '_', (string)$file['name'])) ?: "document.$ext";
   $stored = $prefix . '-' . bin2hex(random_bytes(12)) . ".$ext";
@@ -745,7 +762,7 @@ function clean_settings(string $key, $value): array {
     if ($key === 'departments') {
       $name = $str($row, 60);
       if ($name === '') fail('Department names are required.');
-      if (isset($seen[mb_strtolower($name)])) fail("“$name” is listed twice.");
+      if (isset($seen[mb_strtolower($name)])) fail("“{$name}” is listed twice.");
       $seen[mb_strtolower($name)] = 1;
       $out[] = $name;
       continue;
@@ -761,7 +778,7 @@ function clean_settings(string $key, $value): array {
     }
     $name = $str($row['name'] ?? '');
     if ($name === '') fail('Names are required.');
-    if (isset($seen[mb_strtolower($name)])) fail("“$name” is listed twice.");
+    if (isset($seen[mb_strtolower($name)])) fail("“{$name}” is listed twice.");
     $seen[mb_strtolower($name)] = 1;
     $entry = ['id' => $id($row['id'] ?? ''), 'name' => $name, 'active' => !empty($row['active'])];
     if ($key === 'menuItems') $entry['price'] = (int)round($num($row['price'] ?? null, 'price'));
@@ -886,6 +903,30 @@ function pos_qty($v, string $what = 'quantity'): float {
 function villa_rooms(string $villa): array {
   if ($villa === 'Full Property') return CAPACITY_ROOMS;
   return array_values(array_filter(array_map('trim', explode(',', $villa)), fn($r) => $r !== ''));
+}
+
+/** Fails unless every room in the value is one of the current rooms (or the value is "Full Property"). */
+function assert_room_names(string $villa): void {
+  if ($villa === 'Full Property') return;
+  $rooms = villa_rooms($villa);
+  if (!$rooms) fail('Choose at least one room.');
+  foreach ($rooms as $r) {
+    if (!in_array($r, CAPACITY_ROOMS, true)) fail("“{$r}” is not one of the rooms.");
+  }
+  if (count($rooms) !== count(array_unique($rooms))) fail('A room is listed twice.');
+}
+
+/** What can still be refunded on a booking: money received (room and extras) less any
+ *  cancellation charge and the refunds already paid. $exceptPaymentId leaves one ledger
+ *  line out, for when that line itself is being edited. */
+function refundable(array $booking, ?string $exceptPaymentId = null): int {
+  $st = db()->prepare("SELECT
+      COALESCE(SUM(CASE WHEN kind = 'payment' THEN amount ELSE 0 END), 0) AS received,
+      COALESCE(SUM(CASE WHEN kind = 'refund' THEN amount ELSE 0 END), 0) AS refunded
+    FROM payments WHERE booking_ref = ? AND id <> ?");
+  $st->execute([$booking['ref'], $exceptPaymentId ?? '']);
+  $m = $st->fetch();
+  return (int)$m['received'] - (int)($booking['cancellation_charge'] ?? 0) - (int)$m['refunded'];
 }
 
 /** Fails when any of the rooms is already held by another booking on a night of [in, out). */
