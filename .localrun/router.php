@@ -1,6 +1,6 @@
 <?php
 // Local run of C:\Resoria the way the .htaccess files route it on the server:
-//   .localrun\php\php.exe -S localhost:8090 -t . .localrun\router.php
+//   .localrun\php\php.exe -S 127.0.0.1:8095 -t . .localrun\router.php
 //   /api/*   -> api/index.php
 //   /admin/* -> admin files, otherwise the admin SPA (admin/index.html)
 //   /*       -> the website (site/, the static export of source/website)

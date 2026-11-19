@@ -35,14 +35,16 @@ cd source/website && npm install && npm run build         # website -> source/we
 ```
 
 Copy `source/website/out/` to `site/`. Then create `api/config.php` from
-`source/server/config.example.php` (pointing at your local MySQL), and run the
-installer once from `api/`: `php install.php`.
+`source/server/config.example.php` (pointing at your local MySQL:
+`const DB_HOST = '127.0.0.1;port=3327';`), and run the installer once from
+`api/`: `php install.php`.
 
-`start-resoria.cmd` starts a local MySQL (port 3317, data in `.localrun/mysql-data`)
-and PHP's built-in server with `.localrun/router.php`:
+`start-resoria.cmd` starts a local MySQL (port 3327, data in `.localrun/mysql-data`)
+and PHP's built-in server with `.localrun/router.php`. These ports keep clear of
+other local projects that use 3317/8090:
 
-- Website: http://localhost:8090/
-- Admin: http://localhost:8090/admin/
+- Website: http://127.0.0.1:8095/
+- Admin: http://127.0.0.1:8095/admin/
 
 ## Run locally (macOS / Linux)
 
