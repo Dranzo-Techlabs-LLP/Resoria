@@ -139,15 +139,17 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS sessions (
   INDEX (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+// Change-sheet tables and columns (stay history, additional expenses, configuration lists, inventory)
+ensure_schema(true);
 echo "Tables ready.\n";
 
 // ---------------- Seed roles ----------------
 $roleDefaults = [
-  'Administrator' => ["view_payments","record_payments","view_expenses","edit_expenses","view_accounting","view_users","manage_users","edit_invoice","view_bookings","edit_bookings","cancel_bookings","view_calendar","view_dashboard","view_reports","view_villas","edit_villas"],
-  'Manager'       => ["view_dashboard","view_calendar","view_bookings","edit_bookings","cancel_bookings","view_accounting","view_expenses","edit_expenses","view_reports","view_villas","view_payments","record_payments","view_users"],
+  'Administrator' => ["view_payments","record_payments","view_expenses","edit_expenses","view_accounting","view_users","manage_users","edit_invoice","view_bookings","edit_bookings","cancel_bookings","view_calendar","view_dashboard","view_reports","view_villas","edit_villas","view_inventory","edit_inventory","manage_config"],
+  'Manager'       => ["view_dashboard","view_calendar","view_bookings","edit_bookings","cancel_bookings","view_accounting","view_expenses","edit_expenses","view_reports","view_villas","view_payments","record_payments","view_users","view_inventory","edit_inventory"],
   'Front Desk'    => ["view_dashboard","view_calendar","view_bookings","edit_bookings","view_payments","record_payments","view_villas"],
   'B2B'           => ["view_dashboard","view_calendar","view_bookings","edit_bookings"],
-  'Owner'         => ["view_dashboard","view_calendar","view_bookings","view_accounting","view_expenses","view_reports","view_villas","view_payments"],
+  'Owner'         => ["view_dashboard","view_calendar","view_bookings","view_accounting","view_expenses","view_reports","view_villas","view_payments","view_inventory"],
 ];
 $i = 1;
 foreach ($roleDefaults as $name => $rights) {
@@ -177,22 +179,15 @@ echo "Invoice settings seeded (prefix RE-, next 1, padding 5).\n";
 // ---------------- Seed room notes (the full room names) ----------------
 //  Only fills rooms that have no override yet; staff edits are kept.
 $roomNotes = [
-  'Haven' => 'Haven – Signature Two-Bedroom Pool Villa (Villa 01)',
-  'Solace' => 'Solace – Private Pool Villa (Villa 02)',
-  'Elysian' => 'Elysian – Waterfall View Suite (Suite 01)',
-  'Sylvane' => 'Sylvane – Waterfall View Suite (Suite 02)',
-  'Zephyr' => 'Zephyr – Waterfall View Suite (Suite 03)',
-  'K1' => 'Single room above the kitchen',
-  'K2' => 'Single room above the kitchen',
-  'K3' => 'Single room above the kitchen',
-  'K4' => 'Single room above the kitchen',
-  'R1' => 'Single room, reception side',
-  'R2' => 'Single room, reception side',
-  'R3' => 'Single room, reception side',
-  'Cave Room' => 'Cave room near Chola',
-  'Dormitory' => 'Dormitory, 60 beds in total',
-  'DJ Hall' => 'DJ hall',
-  'Conference Hall' => 'Conference hall',
+  'Haven' => 'Haven – Signature Two-Bedroom Pool Villa (Premium)',
+  'Elysian' => 'Elysian – Waterfall View Suite (Premium)',
+  'Solace' => 'Solace – Private Pool Villa (Premium)',
+  'Sylvane' => 'Sylvane – Waterfall View Suite (Premium)',
+  'Zephyr' => 'Zephyr – Waterfall View Suite (Premium)',
+  'S1' => 'Suite room', 'S2' => 'Suite room', 'S3' => 'Suite room',
+  'S4' => 'Suite room', 'S5' => 'Suite room', 'S6' => 'Suite room',
+  'Dorm 1' => 'Dormitory', 'Dorm 2' => 'Dormitory',
+  'Party Hall' => 'Party hall',
 ];
 foreach ($roomNotes as $room => $note) {
   $pdo->prepare("INSERT INTO room_overrides (villa, notes) VALUES (?,?) ON DUPLICATE KEY UPDATE villa = villa")

@@ -1,159 +1,167 @@
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useMemo } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { can, useAuth } from '../auth/AuthContext'
 import { useStore } from '../data/store'
-import { bookingHasRoom, FULL_PROPERTY, ROOMS, ROOM_OPTIONS, roomColor } from '../lib/config'
-import { monthLabel, parseISO, TODAY } from '../lib/format'
-import { secondaryBtnCls, selectCls } from '../components/styles'
+import { addDays, occupancyOn } from '../lib/booking'
+import { ALL_ROOMS, ROOM_CATEGORIES, ROOMS, roomsByCategory, type RoomConfig } from '../lib/config'
+import { monthLabel, parseISO, TODAY_ISO } from '../lib/format'
+import { refCardCls } from '../components/styles'
+import { KpiCard } from '../components/ui/KpiCard'
+import { PageTitle } from '../components/ui/PageTitle'
+import { addMonths, fmtDayShort, fmtWeekRange, isValidISO, weekStartOf } from '../components/calendar/dates'
+import { MonthGrid } from '../components/calendar/MonthGrid'
+import { WeekGrid } from '../components/calendar/WeekGrid'
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const DAY = 86400000
-const MAX_LANES = 3
-const LANE_H = 20
+type View = 'week' | 'month'
 
-// Short badge shown on the bar for non-plain statuses (H = hold, E = enquiry…)
-const STATUS_BADGE: Record<string, string> = { hold: 'H', enquiry: 'E', 'checked in': 'IN', completed: '✓' }
+/** "All rooms", a category ("Premium") or one room ("Haven"); anything else falls back to All rooms. */
+function normFilter(v: string | null): string {
+  if (!v) return ALL_ROOMS
+  if ((ROOM_CATEGORIES as readonly string[]).includes(v) || ROOMS.some((r) => r.name === v)) return v
+  return ALL_ROOMS
+}
+function roomsForFilter(f: string): RoomConfig[] {
+  if (f === ALL_ROOMS) return ROOMS
+  if ((ROOM_CATEGORIES as readonly string[]).includes(f)) return ROOMS.filter((r) => r.category === f)
+  return ROOMS.filter((r) => r.name === f)
+}
+const later = (a: string, b: string) => (a > b ? a : b)
 
-function startOfDay(d: Date) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()) }
-function addDays(d: Date, n: number) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n) }
-function sameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate() }
-
-interface Seg { ref: string; guest: string; villa: string; status: string; startCol: number; endCol: number; isStart: boolean; isEnd: boolean; lane: number }
+const boxBtnCls =
+  'inline-flex h-10 shrink-0 items-center sm:h-11 justify-center rounded-xl border border-slate-300 bg-white text-[15px] font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white'
 
 export function Calendar() {
   const { data } = useStore()
-  const [cursor, setCursor] = useState(new Date(TODAY.getFullYear(), TODAY.getMonth(), 1))
-  const [villa, setVilla] = useState('All rooms')
-  const year = cursor.getFullYear()
-  const month = cursor.getMonth()
+  const { user } = useAuth()
+  const location = useLocation()
+  const [params, setParams] = useSearchParams()
 
-  const bookings = useMemo(
-    () => data.bookings.filter((b) => (villa === 'All rooms' || bookingHasRoom(b.villa, villa)) && b.status !== 'cancelled'),
-    [data.bookings, villa],
-  )
+  // View, filter and shown date live in the URL so Back from Room availability returns here unchanged.
+  // The shown date is never before today (no navigation to previous weeks / months).
+  const view: View = params.get('view') === 'month' ? 'month' : 'week'
+  const filter = normFilter(params.get('room'))
+  const rawDate = params.get('d')
+  const date = isValidISO(rawDate) && rawDate > TODAY_ISO ? rawDate : TODAY_ISO
+  const rooms = useMemo(() => roomsForFilter(filter), [filter])
+  const linkState = { back: `/calendar${location.search}` }
 
-  const weeks = useMemo(() => {
-    const firstWeekday = new Date(year, month, 1).getDay()
-    const daysInMonth = new Date(year, month + 1, 0).getDate()
-    const numWeeks = Math.ceil((firstWeekday + daysInMonth) / 7)
-    const gridStart = new Date(year, month, 1 - firstWeekday)
-    const out: Date[][] = []
-    for (let w = 0; w < numWeeks; w++) {
-      const row: Date[] = []
-      for (let d = 0; d < 7; d++) row.push(addDays(gridStart, w * 7 + d))
-      out.push(row)
-    }
-    return out
-  }, [year, month])
-
-  function segmentsForWeek(week: Date[]): Seg[] {
-    const day0 = week[0]
-    const day6 = week[6]
-    const items: Seg[] = []
-    for (const b of bookings) {
-      const ci = parseISO(b.checkIn)
-      const co = parseISO(b.checkOut)
-      if (co.getTime() <= ci.getTime()) continue
-      const lastNight = addDays(co, -1)
-      if (ci.getTime() > day6.getTime() || lastNight.getTime() < day0.getTime()) continue
-      const segStart = ci.getTime() > day0.getTime() ? ci : day0
-      const segEnd = lastNight.getTime() < day6.getTime() ? lastNight : day6
-      items.push({
-        ref: b.ref, guest: b.guest, villa: b.villa, status: b.status,
-        startCol: Math.round((startOfDay(segStart).getTime() - day0.getTime()) / DAY),
-        endCol: Math.round((startOfDay(segEnd).getTime() - day0.getTime()) / DAY),
-        isStart: sameDay(segStart, ci), isEnd: sameDay(segEnd, lastNight), lane: 0,
-      })
-    }
-    items.sort((a, b) => a.startCol - b.startCol || b.endCol - a.endCol)
-    const laneEnds: number[] = []
-    for (const it of items) {
-      let lane = 0
-      while (lane < laneEnds.length && laneEnds[lane] >= it.startCol) lane++
-      it.lane = lane
-      laneEnds[lane] = it.endCol
-    }
-    return items
+  const update = (next: { view?: View; room?: string; date?: string }) => {
+    const p = new URLSearchParams(params)
+    const v = next.view ?? view
+    const r = next.room ?? filter
+    const d = later(next.date ?? date, TODAY_ISO)
+    if (v === 'month') p.set('view', 'month')
+    else p.delete('view')
+    if (r === ALL_ROOMS) p.delete('room')
+    else p.set('room', r)
+    if (d > TODAY_ISO) p.set('d', d)
+    else p.delete('d')
+    setParams(p, { replace: true })
   }
+
+  const weekStart = weekStartOf(date)
+  const atStart = view === 'week' ? weekStart === weekStartOf(TODAY_ISO) : date.slice(0, 7) === TODAY_ISO.slice(0, 7)
+  const label = view === 'week' ? fmtWeekRange(weekStart) : monthLabel(parseISO(date).getFullYear(), parseISO(date).getMonth())
+  const step = (dir: 1 | -1) => update({ date: view === 'week' ? addDays(weekStart, 7 * dir) : addMonths(date, dir) })
+
+  const bookedToday = useMemo(() => {
+    const occ = occupancyOn(data.bookings, TODAY_ISO)
+    return rooms.filter((r) => occ.has(r.name)).length
+  }, [data.bookings, rooms])
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Booking calendar</h1>
-        <p className="mt-1 text-sm text-slate-500">Occupancy across your rooms, colored by room. Click any booking to open it.</p>
-      </div>
+      <PageTitle
+        title="Calendar"
+        subtitle={view === 'week' ? 'Click any date to open room availability' : 'B = booked rooms · A = available rooms'}
+      />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <select value={villa} onChange={(e) => setVilla(e.target.value)} className={selectCls}>
-          <option>All rooms</option>
-          {ROOM_OPTIONS.map((v) => (<option key={v}>{v}</option>))}
-        </select>
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => setCursor(new Date(TODAY.getFullYear(), TODAY.getMonth(), 1))} className={secondaryBtnCls}>Today</button>
-          <button onClick={() => setCursor(new Date(year, month - 1, 1))} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label="Previous month"><ChevronLeft size={17} /></button>
-          <div className="min-w-[150px] text-center text-lg font-semibold text-slate-900">{monthLabel(year, month)}</div>
-          <button onClick={() => setCursor(new Date(year, month + 1, 1))} className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" aria-label="Next month"><ChevronRight size={17} /></button>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50">
-          {WEEKDAYS.map((w) => (
-            <div key={w} className="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
-              <span className="hidden sm:inline">{w}</span><span className="sm:hidden">{w[0]}</span>
-            </div>
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div role="group" aria-label="Calendar view" className="inline-flex h-11 rounded-xl border border-slate-300 bg-white p-0.5">
+          {(['week', 'month'] as View[]).map((v) => (
+            <button
+              key={v}
+              type="button"
+              aria-pressed={view === v}
+              onClick={() => update({ view: v })}
+              className={`rounded-[10px] px-4 text-[15px] font-medium transition-colors ${
+                view === v ? 'bg-ink text-white' : 'text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {v === 'week' ? 'Weekly' : 'Monthly'}
+            </button>
           ))}
         </div>
-        <div>
-          {weeks.map((week, wi) => {
-            const segs = segmentsForWeek(week)
-            const hiddenByDay = week.map((_, di) => segs.filter((s) => s.lane >= MAX_LANES && s.startCol <= di && s.endCol >= di).length)
-            return (
-              <div key={wi} className="relative grid grid-cols-7 border-b border-slate-100 last:border-0" style={{ minHeight: 116 }}>
-                {week.map((d, di) => {
-                  const inMonth = d.getMonth() === month
-                  const isToday = sameDay(d, TODAY)
-                  return (
-                    <div key={di} className="border-r border-slate-100 p-1.5 last:border-0">
-                      <div className="flex justify-end">
-                        <span className={`nums flex h-6 w-6 items-center justify-center rounded-full text-xs ${isToday ? 'bg-emerald-700 font-semibold text-white' : inMonth ? 'text-slate-600' : 'text-slate-300'}`}>{d.getDate()}</span>
-                      </div>
-                      {hiddenByDay[di] > 0 && <div className="mt-auto pt-1 text-center text-[10px] font-medium text-slate-400">+{hiddenByDay[di]} more</div>}
-                    </div>
-                  )
-                })}
-                <div className="pointer-events-none absolute inset-x-0" style={{ top: 34 }}>
-                  {segs.filter((s) => s.lane < MAX_LANES).map((s, i) => {
-                    const leftPct = (s.startCol / 7) * 100
-                    const widthPct = ((s.endCol - s.startCol + 1) / 7) * 100
-                    const badge = s.isStart ? STATUS_BADGE[s.status] : ''
-                    return (
-                      <Link key={i} to={`/bookings/${s.ref}`} title={`${s.guest} · ${s.villa} · ${s.status}`}
-                        className={`pointer-events-auto absolute flex items-center gap-1 px-1.5 text-[11px] font-medium leading-[18px] text-white shadow-sm transition hover:brightness-110 hover:ring-2 hover:ring-slate-900/10 ${s.isStart ? 'rounded-l-md' : ''} ${s.isEnd ? 'rounded-r-md' : ''}`}
-                        style={{ left: `calc(${leftPct}% + 3px)`, width: `calc(${widthPct}% - 6px)`, top: s.lane * (LANE_H + 2), height: LANE_H, backgroundColor: roomColor(s.villa) }}>
-                        <span className="flex-1 truncate">{s.isStart ? s.guest : ' '}</span>
-                        {badge && <span className="shrink-0 rounded bg-white/25 px-1 text-[9px] font-bold leading-none">{badge}</span>}
-                      </Link>
-                    )
-                  })}
-                </div>
-              </div>
-            )
-          })}
+        <div className="relative">
+          <select
+            aria-label="Rooms shown"
+            value={filter}
+            onChange={(e) => update({ room: e.target.value })}
+            className="h-11 w-48 appearance-none rounded-xl border border-slate-300 bg-white pl-3.5 pr-9 text-[15px] text-slate-800 focus:border-ink focus:ring-2 focus:ring-ink/20 focus:outline-none"
+          >
+            <option value={ALL_ROOMS}>All rooms</option>
+            {roomsByCategory().map((g) => (
+              <optgroup key={g.category} label={g.category}>
+                {g.rooms.length > 1 && <option value={g.category}>All {g.category} ({g.rooms.length})</option>}
+                {g.rooms.length === 1 && g.rooms[0].name === g.category
+                  ? <option value={g.category}>{g.category}</option>
+                  : g.rooms.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+          <ChevronDown size={16} className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-slate-500" aria-hidden="true" />
+        </div>
+
+        <div className="flex w-full items-center gap-1.5 sm:ml-auto sm:w-auto sm:gap-2">
+          <button type="button" onClick={() => update({ date: TODAY_ISO })} className={`${boxBtnCls} px-3.5 sm:px-4`}>Today</button>
+          <button
+            type="button"
+            onClick={() => step(-1)}
+            disabled={atStart}
+            aria-label={view === 'week' ? 'Previous week' : 'Previous month'}
+            className={`${boxBtnCls} w-10 sm:w-11`}
+          >
+            <ChevronLeft size={18} aria-hidden="true" />
+          </button>
+          <div className="nums min-w-0 flex-1 px-1 text-center text-[15px] font-semibold text-dark sm:min-w-[160px] sm:flex-none sm:text-[17px]" aria-live="polite">
+            {label}
+          </div>
+          <button
+            type="button"
+            onClick={() => step(1)}
+            aria-label={view === 'week' ? 'Next week' : 'Next month'}
+            className={`${boxBtnCls} w-10 sm:w-11`}
+          >
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
-        {ROOMS.map((r) => (
-          <span key={r.name} className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-4 rounded-sm" style={{ backgroundColor: r.color }} />{r.name}
-          </span>
-        ))}
-        <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-4 rounded-sm" style={{ backgroundColor: roomColor(FULL_PROPERTY) }} />{FULL_PROPERTY}
-        </span>
-        <span className="text-slate-400">· multi-room bookings use their first room's color</span>
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard label="Total rooms" value={rooms.length} sub="Resort rooms" />
+        <KpiCard label="Booked today" value={bookedToday} sub={fmtDayShort(TODAY_ISO)} />
+        <KpiCard label="Available today" value={rooms.length - bookedToday} sub="Free tonight" />
       </div>
+
+      <div className={`${refCardCls} overflow-hidden`}>
+        {view === 'week' ? (
+          <div className="overflow-x-auto">
+            <WeekGrid
+              start={weekStart}
+              rooms={rooms}
+              bookings={data.bookings}
+              canOpen={can(user, 'view_bookings')}
+              linkState={linkState}
+            />
+          </div>
+        ) : (
+          <MonthGrid month={date} rooms={rooms} bookings={data.bookings} linkState={linkState} />
+        )}
+      </div>
+      {view === 'month' && (
+        <p className="mt-3 text-sm text-slate-500">Past dates are dimmed and previous months are not available.</p>
+      )}
     </>
   )
 }

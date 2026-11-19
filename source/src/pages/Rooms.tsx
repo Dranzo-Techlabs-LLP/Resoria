@@ -2,15 +2,16 @@ import { useState } from 'react'
 import { Pencil } from 'lucide-react'
 import { can, useAuth } from '../auth/AuthContext'
 import { effectiveRate, useStore } from '../data/store'
-import { ROOMS, roomColor, type RoomConfig } from '../lib/config'
+import { roomsByCategory, type RoomConfig } from '../lib/config'
 import { formatINR } from '../lib/format'
-import { inputCls, primaryBtnCls, secondaryBtnCls, textareaCls } from '../components/styles'
+import { fieldAreaCls, fieldCls, labelCls, outlineBtnCls, refCardCls, solidBtnCls } from '../components/styles'
+import { ErrorNote, SavedTag, plural } from '../components/config/kit'
 
-function DetailRow({ label, value, valueClass = 'text-slate-900' }: { label: string; value: React.ReactNode; valueClass?: string }) {
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-1.5 text-sm">
+    <div className="flex items-center justify-between gap-3 py-2 text-[15px]">
       <span className="text-slate-500">{label}</span>
-      <span className={`font-medium ${valueClass}`}>{value}</span>
+      <span className="font-medium text-dark">{value}</span>
     </div>
   )
 }
@@ -29,6 +30,7 @@ function RoomCard({ r, canEdit }: { r: RoomConfig; canEdit: boolean }) {
   const [maxInput, setMaxInput] = useState(String(maxGuests))
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
 
   function startEdit() {
     setRateInput(String(rate))
@@ -36,6 +38,7 @@ function RoomCard({ r, canEdit }: { r: RoomConfig; canEdit: boolean }) {
     setMinInput(String(minGuests))
     setMaxInput(String(maxGuests))
     setError('')
+    setSaved(false)
     setEditing(true)
   }
   async function save() {
@@ -61,6 +64,8 @@ function RoomCard({ r, canEdit }: { r: RoomConfig; canEdit: boolean }) {
     try {
       await saveVillaOverride(r.name, { baseRate, notes: notesInput, ...capacity })
       setEditing(false)
+      setSaved(true)
+      window.setTimeout(() => setSaved(false), 3000)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save. Please try again.')
     } finally {
@@ -69,52 +74,75 @@ function RoomCard({ r, canEdit }: { r: RoomConfig; canEdit: boolean }) {
   }
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2.5">
-          <span className="mt-1 h-3 w-3 rounded-full" style={{ backgroundColor: roomColor(r.name) }} />
-          <div>
-            <h3 className="text-[15px] font-semibold text-slate-900">{r.name}</h3>
-            <p className="text-xs text-slate-400">{r.slug}</p>
+    <div className={`${refCardCls} p-5`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-[17px] font-semibold text-dark">{r.name}</h3>
+            {saved && <SavedTag />}
           </div>
+          <p className="text-sm text-slate-500">{r.code} · {r.status}</p>
         </div>
-        {canEdit && !editing && <button onClick={startEdit} className="text-slate-400 hover:text-emerald-700" aria-label="Edit room"><Pencil size={15} /></button>}
+        {canEdit && !editing && (
+          <button type="button" onClick={startEdit} className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 hover:text-dark" aria-label={`Edit ${r.name}`}>
+            <Pencil size={16} />
+          </button>
+        )}
       </div>
 
       {!editing ? (
-        <div className="mt-4 divide-y divide-slate-100">
-          <DetailRow label="Capacity" value={`${minGuests}–${maxGuests} guests`} />
-          <DetailRow label="Base rate" value={<span className="nums">{formatINR(rate)}</span>} />
-          <DetailRow label="Status" value={r.status} valueClass={r.status === 'Active' ? 'text-emerald-700' : 'text-slate-500'} />
-          {notes && <p className="pt-2 text-[13px] text-slate-500">{notes}</p>}
+        <div className="mt-3 divide-y divide-[#eee8dc]">
+          <DetailRow label="Base rate" value={<span className="nums">{rate > 0 ? `${formatINR(rate)} / night` : 'Not set'}</span>} />
+          <DetailRow label="Capacity" value={minGuests === maxGuests ? plural(maxGuests, 'guest') : `${minGuests}–${maxGuests} guests`} />
+          {notes && <p className="pt-2 text-sm text-slate-600">{notes}</p>}
         </div>
       ) : (
         <div className="mt-4 space-y-3">
+          <label className="block">
+            <span className={labelCls}>Base rate (₹ / night)</span>
+            <input type="number" inputMode="numeric" min={0} value={rateInput} onChange={(e) => setRateInput(e.target.value)} className={fieldCls} />
+          </label>
           {r.editableCapacity && (
             <div className="grid grid-cols-2 gap-3">
-              <label className="block"><span className="mb-1 block text-[13px] font-medium text-slate-700">Min guests</span><input type="number" min={1} value={minInput} onChange={(e) => setMinInput(e.target.value)} className={`${inputCls} w-full`} /></label>
-              <label className="block"><span className="mb-1 block text-[13px] font-medium text-slate-700">Max guests</span><input type="number" min={1} value={maxInput} onChange={(e) => setMaxInput(e.target.value)} className={`${inputCls} w-full`} /></label>
+              <label className="block"><span className={labelCls}>Min guests</span><input type="number" inputMode="numeric" min={1} value={minInput} onChange={(e) => setMinInput(e.target.value)} className={fieldCls} /></label>
+              <label className="block"><span className={labelCls}>Max guests</span><input type="number" inputMode="numeric" min={1} value={maxInput} onChange={(e) => setMaxInput(e.target.value)} className={fieldCls} /></label>
             </div>
           )}
-          <label className="block"><span className="mb-1 block text-[13px] font-medium text-slate-700">Base rate (₹ / night)</span><input type="number" min={0} value={rateInput} onChange={(e) => setRateInput(e.target.value)} className={`${inputCls} w-full`} /></label>
-          <label className="block"><span className="mb-1 block text-[13px] font-medium text-slate-700">Notes / settings</span><textarea rows={2} value={notesInput} onChange={(e) => setNotesInput(e.target.value)} className={textareaCls} /></label>
-          {error && <p className="text-[13px] text-red-600">{error}</p>}
-          <div className="flex gap-2"><button onClick={save} disabled={saving} className={primaryBtnCls}>{saving ? 'Saving…' : 'Save'}</button><button onClick={() => setEditing(false)} disabled={saving} className={secondaryBtnCls}>Cancel</button></div>
+          <label className="block">
+            <span className={labelCls}>Notes</span>
+            <textarea rows={2} value={notesInput} onChange={(e) => setNotesInput(e.target.value)} className={fieldAreaCls} />
+          </label>
+          {error && <ErrorNote>{error}</ErrorNote>}
+          <div className="flex gap-2.5">
+            <button type="button" onClick={() => setEditing(false)} disabled={saving} className={outlineBtnCls}>Cancel</button>
+            <button type="button" onClick={save} disabled={saving} className={`${solidBtnCls} flex-1`}>{saving ? 'Saving…' : 'Save'}</button>
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-export function Rooms() {
+/** Configuration → Rooms: base rate, capacity and notes per room, grouped by category. */
+export function RoomsSettings() {
   const { user } = useAuth()
   const canEdit = can(user, 'edit_villas')
   return (
-    <>
-      <div className="mb-6"><h1 className="text-2xl font-semibold tracking-tight text-slate-900">Rooms</h1></div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {ROOMS.map((r) => (<RoomCard key={r.id} r={r} canEdit={canEdit} />))}
-      </div>
-    </>
+    <div className="space-y-7">
+      <p className="text-[15px] text-slate-600">
+        The base rate is the nightly price used to work out the room amount on a new booking.
+        {!canEdit && ' You have read-only access to room settings.'}
+      </p>
+      {roomsByCategory().map((g) => (
+        <section key={g.category} aria-label={g.category}>
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+            {g.category} · {plural(g.rooms.length, 'room')}
+          </h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {g.rooms.map((r) => (<RoomCard key={r.id} r={r} canEdit={canEdit} />))}
+          </div>
+        </section>
+      ))}
+    </div>
   )
 }

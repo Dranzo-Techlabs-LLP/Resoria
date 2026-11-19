@@ -8,6 +8,10 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   base: '/admin/',
   plugins: [react(), tailwindcss()],
+  // `npm run dev`: send /api to the local PHP server started by ../start-resoria.sh
+  server: {
+    proxy: { '/api': { target: 'http://localhost:8091', changeOrigin: true } },
+  },
   build: {
     // Straight into the deployable layout next to this folder (../admin + ../api)
     outDir: '../admin',

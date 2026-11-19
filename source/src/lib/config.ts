@@ -28,45 +28,55 @@ export const ALL_ROOMS = 'All rooms'
 /** Special room value: books the entire property (all rooms at once). */
 export const FULL_PROPERTY = 'Full Property'
 
+/** Room categories, in display order (Dashboard room status, Calendar, Room availability). */
+export const ROOM_CATEGORIES = ['Premium', 'Suite Rooms', 'Dormitory', 'Party Hall'] as const
+export type RoomCategory = (typeof ROOM_CATEGORIES)[number]
+
 export interface RoomConfig {
   id: string
   name: string
   slug: string
   code: string
+  category: RoomCategory
   color: string
   minGuests: number
   maxGuests: number
   baseRate: number
   status: 'Active' | 'Inactive'
-  editableCapacity?: boolean // capacity can be changed on the Rooms page (stored as an override)
+  editableCapacity?: boolean // capacity can be changed in Configuration → Rooms (stored as an override)
 }
 
-// Capacities are starting values: every room's can be changed on the Rooms page
-// (stored as an override), and the full names are seeded there as notes
-// (source/server/install.php).
+// The rooms, grouped as in the change sheet: Premium 5, Suite Rooms 6,
+// Dormitory 2, Party Hall 1. Base rates and capacity are starting values;
+// both can be changed in Configuration → Rooms (stored as overrides).
 export const ROOMS: RoomConfig[] = [
-  // Villas
-  { id: 'r1', name: 'Haven', slug: 'haven', code: 'V01', color: '#1e5039', minGuests: 2, maxGuests: 6, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r2', name: 'Solace', slug: 'solace', code: 'V02', color: '#2a6447', minGuests: 2, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
-  // Waterfall view suites
-  { id: 'r3', name: 'Elysian', slug: 'elysian', code: 'S01', color: '#0f766e', minGuests: 2, maxGuests: 3, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r4', name: 'Sylvane', slug: 'sylvane', code: 'S02', color: '#3b7a5a', minGuests: 2, maxGuests: 3, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r5', name: 'Zephyr', slug: 'zephyr', code: 'S03', color: '#5d9878', minGuests: 2, maxGuests: 3, baseRate: 0, status: 'Active', editableCapacity: true },
-  // Single rooms above the kitchen
-  { id: 'r6', name: 'K1', slug: 'k1', code: 'K1', color: '#a16207', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r7', name: 'K2', slug: 'k2', code: 'K2', color: '#b45309', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r8', name: 'K3', slug: 'k3', code: 'K3', color: '#92400e', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r9', name: 'K4', slug: 'k4', code: 'K4', color: '#a88a4e', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  // Single rooms on the reception side
-  { id: 'r10', name: 'R1', slug: 'r1', code: 'R1', color: '#9a3412', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r11', name: 'R2', slug: 'r2', code: 'R2', color: '#c2410c', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r12', name: 'R3', slug: 'r3', code: 'R3', color: '#7c2d12', minGuests: 1, maxGuests: 2, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r13', name: 'Cave Room', slug: 'cave-room', code: 'CAVE', color: '#57534e', minGuests: 2, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r14', name: 'Dormitory', slug: 'dormitory', code: 'DORM', color: '#475569', minGuests: 10, maxGuests: 60, baseRate: 0, status: 'Active', editableCapacity: true },
-  // Event spaces
-  { id: 'r15', name: 'DJ Hall', slug: 'dj-hall', code: 'DJ', color: '#be185d', minGuests: 10, maxGuests: 100, baseRate: 0, status: 'Active', editableCapacity: true },
-  { id: 'r16', name: 'Conference Hall', slug: 'conference-hall', code: 'CONF', color: '#9f1239', minGuests: 10, maxGuests: 100, baseRate: 0, status: 'Active', editableCapacity: true },
+  // Premium
+  { id: 'r1', name: 'Haven', slug: 'haven', code: 'P01', category: 'Premium', color: '#0b241e', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r2', name: 'Elysian', slug: 'elysian', code: 'P02', category: 'Premium', color: '#0b241e', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r3', name: 'Solace', slug: 'solace', code: 'P03', category: 'Premium', color: '#0b241e', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r4', name: 'Sylvane', slug: 'sylvane', code: 'P04', category: 'Premium', color: '#0b241e', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r5', name: 'Zephyr', slug: 'zephyr', code: 'P05', category: 'Premium', color: '#0b241e', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  // Suite rooms
+  { id: 'r6', name: 'S1', slug: 's1', code: 'S1', category: 'Suite Rooms', color: '#1e5039', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r7', name: 'S2', slug: 's2', code: 'S2', category: 'Suite Rooms', color: '#1e5039', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r8', name: 'S3', slug: 's3', code: 'S3', category: 'Suite Rooms', color: '#1e5039', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r9', name: 'S4', slug: 's4', code: 'S4', category: 'Suite Rooms', color: '#1e5039', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r10', name: 'S5', slug: 's5', code: 'S5', category: 'Suite Rooms', color: '#1e5039', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r11', name: 'S6', slug: 's6', code: 'S6', category: 'Suite Rooms', color: '#1e5039', minGuests: 1, maxGuests: 4, baseRate: 0, status: 'Active', editableCapacity: true },
+  // Dormitory
+  { id: 'r12', name: 'Dorm 1', slug: 'dorm-1', code: 'D1', category: 'Dormitory', color: '#475569', minGuests: 1, maxGuests: 20, baseRate: 0, status: 'Active', editableCapacity: true },
+  { id: 'r13', name: 'Dorm 2', slug: 'dorm-2', code: 'D2', category: 'Dormitory', color: '#475569', minGuests: 1, maxGuests: 20, baseRate: 0, status: 'Active', editableCapacity: true },
+  // Party hall
+  { id: 'r14', name: 'Party Hall', slug: 'party-hall', code: 'PH', category: 'Party Hall', color: '#a16207', minGuests: 1, maxGuests: 200, baseRate: 0, status: 'Active', editableCapacity: true },
 ]
+
+/** Rooms grouped by category, in ROOM_CATEGORIES order. */
+export function roomsByCategory(): { category: RoomCategory; rooms: RoomConfig[] }[] {
+  return ROOM_CATEGORIES.map((category) => ({ category, rooms: ROOMS.filter((r) => r.category === category) }))
+}
+export function roomCategory(name: string): RoomCategory | undefined {
+  return ROOMS.find((r) => r.name === name)?.category
+}
 
 export const ROOM_NAMES: string[] = ROOMS.map((r) => r.name)
 

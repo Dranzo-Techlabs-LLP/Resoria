@@ -24,7 +24,9 @@ out = os.path.join(ROOT, "release", f"resoria-deploy-{stamp}.zip")
 
 def add_tree(z: zipfile.ZipFile, src: str, prefix: str) -> int:
     count = 0
-    for folder, _, files in os.walk(src):
+    for folder, dirs, files in os.walk(src):
+        # Uploaded ID proofs / purchase bills are server data: never ship local ones
+        dirs[:] = [d for d in dirs if not (prefix == "api/" and folder == src and d == "uploads")]
         for name in files:
             if name in SKIP:
                 continue
@@ -45,5 +47,6 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
 
 names = zipfile.ZipFile(out).namelist()
 assert "api/config.php" not in names, "config.php must never ship"
+assert not any(x.startswith("api/uploads/") for x in names), "uploads must never ship"
 assert ".htaccess" in names and "admin/.htaccess" in names and "api/.htaccess" in names
 print(f"{out}\n{n} files, {os.path.getsize(out) / 1024:.0f} KB")

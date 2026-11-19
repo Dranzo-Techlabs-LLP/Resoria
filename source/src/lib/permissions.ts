@@ -16,6 +16,9 @@ export const PERMISSIONS: { key: string; label: string }[] = [
   { key: 'view_reports', label: 'View & export reports' },
   { key: 'view_villas', label: 'View rooms' },
   { key: 'edit_villas', label: 'Edit room settings' },
+  { key: 'view_inventory', label: 'View inventory' },
+  { key: 'edit_inventory', label: 'Add stock / record usage' },
+  { key: 'manage_config', label: 'Edit configuration (agents, menu, hall pricing, inventory items)' },
 ]
 
 export const ALL_RIGHTS: string[] = PERMISSIONS.map((p) => p.key)
@@ -25,7 +28,7 @@ export const ROLE_DEFAULTS: Record<string, string[]> = {
   Manager: [
     'view_dashboard', 'view_calendar', 'view_bookings', 'edit_bookings', 'cancel_bookings',
     'view_accounting', 'view_expenses', 'edit_expenses', 'view_reports', 'view_villas',
-    'view_payments', 'record_payments', 'view_users',
+    'view_payments', 'record_payments', 'view_users', 'view_inventory', 'edit_inventory',
   ],
   'Front Desk': [
     'view_dashboard', 'view_calendar', 'view_bookings', 'edit_bookings',
@@ -34,17 +37,18 @@ export const ROLE_DEFAULTS: Record<string, string[]> = {
   B2B: ['view_dashboard', 'view_calendar', 'view_bookings', 'edit_bookings'],
   Owner: [
     'view_dashboard', 'view_calendar', 'view_bookings', 'view_accounting',
-    'view_expenses', 'view_reports', 'view_villas', 'view_payments',
+    'view_expenses', 'view_reports', 'view_villas', 'view_payments', 'view_inventory',
   ],
 }
 
 export const EXPENSE_CATEGORIES = [
-  'B2B Commission', 'Food', 'Staff', 'Maintenance', 'Cleaning', 'Utilities', 'Supplies', 'Misc',
+  'B2B Commission', 'Inventory Purchase', 'Food', 'Staff', 'Maintenance', 'Cleaning', 'Utilities', 'Supplies', 'Misc',
 ]
 
 // Soft-tinted pill classes per expense category.
 export const CATEGORY_PILL: Record<string, string> = {
   'B2B Commission': 'bg-violet-100 text-violet-700',
+  'Inventory Purchase': 'bg-emerald-100 text-emerald-800',
   Food: 'bg-slate-100 text-slate-600',
   Staff: 'bg-sky-100 text-sky-700',
   Maintenance: 'bg-amber-100 text-amber-800',
@@ -54,7 +58,7 @@ export const CATEGORY_PILL: Record<string, string> = {
   Misc: 'bg-slate-100 text-slate-600',
 }
 
-export const PAYMENT_METHODS = ['Cash', 'UPI', 'Card', 'Bank transfer']
+export const PAYMENT_METHODS = ['Cash', 'UPI', 'Card', 'Bank Transfer']
 
 export const BOOKING_STATUSES = [
   'enquiry', 'hold', 'confirmed', 'checked in', 'completed', 'cancelled',

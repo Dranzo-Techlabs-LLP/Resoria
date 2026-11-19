@@ -19,9 +19,10 @@ export function RequireAuth() {
   return <Outlet />
 }
 
-/** Gate a route behind a specific permission; otherwise bounce to the dashboard. */
-export function RequireRight({ right, children }: { right: string; children: ReactElement }) {
+/** Gate a route behind a permission (or any of several); otherwise bounce to the dashboard. */
+export function RequireRight({ right, children }: { right: string | string[]; children: ReactElement }) {
   const { user } = useAuth()
-  if (!can(user, right)) return <Navigate to="/" replace />
+  const rights = Array.isArray(right) ? right : [right]
+  if (!rights.some((r) => can(user, r))) return <Navigate to="/" replace />
   return children
 }

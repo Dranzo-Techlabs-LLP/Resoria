@@ -1,112 +1,157 @@
-import { LogIn, LogOut } from 'lucide-react'
-import { useAuth } from '../auth/AuthContext'
-import { B2B_CATEGORY, isPaidOutB2b, useStore } from '../data/store'
-import { fmtDate, formatINR, TODAY, TODAY_ISO, toISO } from '../lib/format'
-import { StatusPill } from '../components/ui/StatusPill'
-import { VillaDot } from '../components/ui/VillaDot'
-import type { Booking } from '../types'
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { ChevronRight } from 'lucide-react'
+import { can, useAuth } from '../auth/AuthContext'
+import { useStore } from '../data/store'
+import { RESORT } from '../lib/config'
+import { addDays, byNewest, occupancyOn, TOTAL_ROOMS } from '../lib/booking'
+import { fmtDateShort, TODAY, TODAY_ISO, toISO } from '../lib/format'
+import { cardTitleCls, refCardCls } from '../components/styles'
+import { KpiCard } from '../components/ui/KpiCard'
+import { PageTitle } from '../components/ui/PageTitle'
+import { RoomBoard } from '../components/ui/RoomBoard'
+import { fmtDayLong, fmtFullDate, MONTHS_LONG } from '../components/calendar/dates'
+import { useRoomCanClick, useRoomClick } from '../components/calendar/useRoomClick'
+import { formatLakh, monthMoney } from '../components/dashboard/finance'
+import { RevenueExpenseChart, type MonthPoint } from '../components/dashboard/RevenueExpenseChart'
+import { SourceDonut } from '../components/dashboard/SourceDonut'
 
-const MONTH = TODAY_ISO.slice(0, 7)
-const IN30 = toISO(new Date(TODAY.getFullYear(), TODAY.getMonth(), TODAY.getDate() + 30))
+const navBtnCls =
+  'inline-flex h-10 items-center gap-1 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50'
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+/** The month `back` months before the current one. */
+function monthOf(back: number) {
+  const d = new Date(TODAY.getFullYear(), TODAY.getMonth() - back, 1)
+  return { key: toISO(d).slice(0, 7), short: MONTHS_LONG[d.getMonth()].slice(0, 3), long: MONTHS_LONG[d.getMonth()], year: d.getFullYear() }
+}
+
+const oneDecimal = (n: number) => n.toFixed(1).replace(/\.0$/, '')
+
+/** "Today Room Status": today and upcoming nights only (no previous dates). */
+function RoomStatusCard() {
+  const { data } = useStore()
+  const [date, setDate] = useState(TODAY_ISO)
+  const onRoom = useRoomClick(date)
+  const canClick = useRoomCanClick()
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="nums mt-2 text-[26px] font-semibold tracking-tight text-emerald-700">{value}</div>
-      <div className="mt-1 text-xs text-slate-500">{sub}</div>
-    </div>
+    <section className={`${refCardCls} p-5 sm:p-6`} aria-labelledby="room-status-title">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <h2 id="room-status-title" className={cardTitleCls}>Today Room Status</h2>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="nums mr-1 text-[15px] font-medium text-dark" aria-live="polite">{fmtDayLong(date)}</span>
+          {date !== TODAY_ISO && (
+            <button type="button" onClick={() => setDate(TODAY_ISO)} className={navBtnCls}>Today</button>
+          )}
+          <button type="button" onClick={() => setDate((d) => addDays(d, 1))} className={navBtnCls}>
+            Next day <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <RoomBoard bookings={data.bookings} date={date} onRoom={onRoom} canClick={canClick} />
+    </section>
   )
 }
 
-function TodayCard({ title, icon, empty, rows }: { title: string; icon: React.ReactNode; empty: string; rows: Booking[] }) {
+/** The 5 most recently made bookings (shown to users who can view bookings). */
+function RecentBookings() {
+  const { data } = useStore()
+  const recent = useMemo(() => [...data.bookings].sort(byNewest).slice(0, 5), [data.bookings])
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">{icon}{title}</h2>
-      <div className="mt-3 divide-y divide-slate-100">
-        {rows.length === 0 && <p className="py-4 text-[13px] text-slate-500">{empty}</p>}
-        {rows.map((b) => (
-          <div key={b.id} className="flex items-center justify-between gap-3 py-3">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-slate-900">{b.guest}</div>
-              <div className="truncate text-xs text-slate-500">{b.villa} · <span className="nums">{b.ref}</span></div>
-            </div>
-            <StatusPill status={b.status} />
-          </div>
+    <section className={`${refCardCls} p-5 sm:p-6`} aria-labelledby="recent-title">
+      <h2 id="recent-title" className={`${cardTitleCls} mb-3`}>Recent bookings</h2>
+      {recent.length === 0 && <p className="py-6 text-sm text-slate-500">No bookings yet.</p>}
+      <ul className="divide-y divide-[#ece8df]">
+        {recent.map((b) => (
+          <li key={b.id}>
+            <Link
+              to={`/bookings/${encodeURIComponent(b.ref)}`}
+              className="-mx-2 flex items-center justify-between gap-3 rounded-lg px-2 py-3 transition-colors hover:bg-[#f7f5f0]"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-[15px] font-semibold text-dark">{b.guest}</div>
+                <div className="truncate text-sm text-slate-500">
+                  {b.villa} · {b.guests} {b.guests === 1 ? 'guest' : 'guests'}
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="nums text-[15px] text-slate-600">{fmtDateShort(b.checkIn)}</div>
+                {b.status === 'cancelled' && <div className="text-xs font-medium text-red-700">Cancelled</div>}
+              </div>
+            </Link>
+          </li>
         ))}
-      </div>
-    </div>
+      </ul>
+    </section>
   )
 }
 
 export function Dashboard() {
   const { user } = useAuth()
   const { data } = useStore()
-  const firstName = user?.name.split(' ')[0] ?? 'there'
+  const showMoney = can(user, 'view_accounting')
+  const showBookings = can(user, 'view_bookings')
 
-  const collected = data.bookings.reduce((s, b) => s + b.payments.filter((p) => p.date.startsWith(MONTH)).reduce((ps, p) => ps + (p.kind === 'refund' ? -p.amount : p.amount), 0), 0)
-  const monthExpenses = data.expenses.filter((e) => e.date.startsWith(MONTH))
-  // only the B2B commission the resort pays out comes off the revenue; money the partner collected was never received
-  const b2b = monthExpenses.filter(isPaidOutB2b).reduce((s, e) => s + e.amount, 0)
-  const operating = monthExpenses.filter((e) => e.category !== B2B_CATEGORY).reduce((s, e) => s + e.amount, 0)
-  const revenueMTD = collected - b2b
-  const profitMTD = revenueMTD - operating
+  const occupied = useMemo(() => occupancyOn(data.bookings, TODAY_ISO).size, [data.bookings])
 
-  const arrivals = data.bookings.filter((b) => b.checkIn === TODAY_ISO && b.status !== 'cancelled')
-  const departures = data.bookings.filter((b) => b.checkOut === TODAY_ISO && b.status !== 'cancelled')
-  const upcoming = data.bookings
-    .filter((b) => b.checkIn > TODAY_ISO && b.checkIn <= IN30 && b.status !== 'cancelled')
-    .sort((a, b) => (a.checkIn < b.checkIn ? -1 : 1))
+  const money = useMemo(() => {
+    const months = [5, 4, 3, 2, 1, 0].map(monthOf)
+    const points: MonthPoint[] = months.map((m) => {
+      const mm = monthMoney(data, m.key)
+      return { key: m.key, label: m.short, long: `${m.long} ${m.year}`, revenue: mm.revenue, expenses: mm.expenses }
+    })
+    const current = monthMoney(data, months[5].key)
+    const previous = monthMoney(data, months[4].key)
+    return { points, current, previous, month: months[5], prevMonth: months[4] }
+  }, [data])
+
+  const { current, previous, month, prevMonth } = money
+  const change = previous.revenue > 0 ? Math.round(((current.revenue - previous.revenue) / previous.revenue) * 100) : null
+  const margin = current.revenue > 0 ? Math.round((current.profit / current.revenue) * 100) : null
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Welcome back, {firstName}</h1>
-        <p className="mt-1 text-sm text-slate-500">{fmtDate(TODAY_ISO)} · here&apos;s what&apos;s happening</p>
-      </div>
+      <PageTitle title="Dashboard" subtitle={`${fmtFullDate(TODAY_ISO)} · ${RESORT.name}`} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Check-ins today" value={String(arrivals.length)} sub="arriving guests" />
-        <StatCard label="Check-outs today" value={String(departures.length)} sub="departing guests" />
-        <StatCard label="Revenue (MTD)" value={formatINR(revenueMTD)} sub="collected this month" />
-        <StatCard label="Profit (MTD)" value={formatINR(profitMTD)} sub="after expenses" />
+        <KpiCard
+          label="Occupied rooms"
+          value={`${occupied} / ${TOTAL_ROOMS}`}
+          sub={`${oneDecimal((occupied / TOTAL_ROOMS) * 100)}% occupancy`}
+        />
+        {showMoney && (
+          <>
+            <KpiCard
+              label={`Revenue · ${month.short}`}
+              value={formatLakh(current.revenue)}
+              sub={change === null ? 'This month' : `${change >= 0 ? '+' : '−'}${Math.abs(change)}% vs ${prevMonth.long}`}
+            />
+            <KpiCard label={`Expenses · ${month.short}`} value={formatLakh(current.expenses)} sub="This month" />
+            <KpiCard
+              label="Net profit"
+              value={formatLakh(current.profit)}
+              sub={margin === null ? 'No revenue yet this month' : `${margin}% margin`}
+            />
+          </>
+        )}
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <TodayCard title="Arrivals today" icon={<LogIn size={16} className="text-emerald-600" />} empty="No arrivals today." rows={arrivals} />
-        <TodayCard title="Departures today" icon={<LogOut size={16} className="text-amber-600" />} empty="No departures today." rows={departures} />
+      <div className={`mt-5 grid grid-cols-1 gap-5 ${showBookings ? 'xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]' : ''}`}>
+        <RoomStatusCard />
+        {showBookings && <RecentBookings />}
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <h2 className="px-5 py-4 text-[15px] font-semibold text-slate-900">📅 Upcoming (next 30 days)</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-collapse text-sm">
-            <thead className="border-y border-slate-200 bg-slate-50">
-              <tr>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Guest</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Room</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Check-in</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Check-out</th>
-                <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                <th className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {upcoming.map((b) => (
-                <tr key={b.id} className="hover:bg-slate-50">
-                  <td className="px-5 py-3 font-medium text-slate-900">{b.guest}</td>
-                  <td className="px-5 py-3"><span className="inline-flex items-center gap-2 text-slate-700"><VillaDot villa={b.villa} />{b.villa}</span></td>
-                  <td className="nums px-5 py-3 text-slate-700">{fmtDate(b.checkIn)}</td>
-                  <td className="nums px-5 py-3 text-slate-700">{fmtDate(b.checkOut)}</td>
-                  <td className="px-5 py-3"><StatusPill status={b.status} /></td>
-                  <td className="nums px-5 py-3 text-right font-semibold text-slate-900">{formatINR(b.total)}</td>
-                </tr>
-              ))}
-              {upcoming.length === 0 && <tr><td colSpan={6} className="px-5 py-10 text-center text-sm text-slate-500">No upcoming bookings.</td></tr>}
-            </tbody>
-          </table>
+      {showMoney && (
+        <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)]">
+          <section className={`${refCardCls} p-5 sm:p-6`} aria-labelledby="rev-exp-title">
+            <h2 id="rev-exp-title" className={`${cardTitleCls} mb-4`}>Revenue &amp; Expenses · last 6 months</h2>
+            <RevenueExpenseChart data={money.points} />
+          </section>
+          <section className={`${refCardCls} p-5 sm:p-6`} aria-labelledby="by-source-title">
+            <h2 id="by-source-title" className={`${cardTitleCls} mb-5`}>Revenue by source · {month.long}</h2>
+            <SourceDonut bySource={current.bySource} total={current.revenue} month={month.long} />
+          </section>
         </div>
-      </div>
+      )}
     </>
   )
 }

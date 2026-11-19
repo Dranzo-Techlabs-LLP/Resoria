@@ -24,8 +24,17 @@
   --color-gold: #a88a4e; /* gold for text on light surfaces */
   --color-gold-light: #c3b078; /* the logo's gold, for use on forest */
 
+  /* Change-sheet palette (reference screens) */
+  --color-ink: #0b241e; /* primary buttons, active nav, booked rooms */
+  --color-ink-hover: #133a30;
+  --color-accent: #b5771f; /* partial-payment bars, B2B / chart expenses */
+  --color-due: #8a5a12; /* outstanding amounts */
+  --color-due-soft: #fbf0dc; /* due / unpaid pills */
+  --color-ok: #2f7a4f; /* settled bars */
+  --color-sand: #efece4; /* subtle fills (info boxes, table heads) */
+
   /* Surfaces */
-  --color-canvas: #faf8f3; /* warm ivory page background */
+  --color-canvas: #f5f3ee; /* warm page background */
   --color-card: #ffffff;
   --color-line: #e2e8f0; /* slate-200 */
 
@@ -44,8 +53,9 @@
      serif/display tokens are kept (a few components still reference them)
      but now resolve to DM Sans, so every heading matches the body text. */
   --font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-serif: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Fraunces', Georgia, 'Times New Roman', serif;
+  /* Page titles and card titles: the reference screens' serif */
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
   /* The wordmark's high-contrast serif, for the brand name only */
   --font-brand: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
 
@@ -91,6 +101,14 @@
   * {
     scrollbar-width: thin;
     scrollbar-color: #cbd5e1 transparent;
+  }
+}
+
+@layer base {
+  /* Absolutely positioned bits inside a horizontal scroller (e.g. sr-only table
+     headers) must stay inside it, or they widen the page on phones. */
+  .overflow-x-auto {
+    position: relative;
   }
 }
 

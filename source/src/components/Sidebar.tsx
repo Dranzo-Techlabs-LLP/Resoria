@@ -1,9 +1,8 @@
 import { NavLink } from 'react-router-dom'
-import { LogOut, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { navItems } from './navItems'
 import { useAuth } from '../auth/AuthContext'
 import { PROPERTY_NAME, PROPERTY_TAGLINE } from '../lib/config'
-import { initials } from '../lib/format'
 
 interface SidebarProps {
   onNavigate?: () => void
@@ -12,16 +11,15 @@ interface SidebarProps {
 
 export function Sidebar({ onNavigate, onClose }: SidebarProps) {
   const { user, logout } = useAuth()
-  const items = navItems.filter((item) => user?.rights.includes(item.right))
+  const items = navItems.filter((item) => (Array.isArray(item.right) ? item.right : [item.right]).some((r) => user?.rights.includes(r)))
 
   return (
-    <div className="flex h-full w-64 flex-col border-r border-slate-200 bg-white">
-      {/* Header */}
-      <div className="flex h-16 items-center gap-2.5 border-b border-slate-100 px-4">
-        <img src={`${import.meta.env.BASE_URL}resoria-logo.png`} alt={PROPERTY_NAME} className="h-9 w-9 shrink-0 rounded-full object-cover" />
+    <div className="flex h-full w-64 flex-col border-r border-[#e6e1d6] bg-white">
+      {/* Brand */}
+      <div className="flex items-start gap-2 px-6 pt-7 pb-6">
         <div className="min-w-0 leading-tight">
-          <div className="truncate font-brand text-xl font-semibold text-dark">{PROPERTY_NAME}</div>
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-gold">{PROPERTY_TAGLINE}</div>
+          <div className="font-display text-[26px] font-semibold text-dark">{PROPERTY_NAME}</div>
+          <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#5b6b4f]">{PROPERTY_TAGLINE}</div>
         </div>
         {onClose && (
           <button
@@ -34,51 +32,29 @@ export function Sidebar({ onNavigate, onClose }: SidebarProps) {
         )}
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-2">
-        {items.map((item) => {
-          const Icon = item.icon
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                  isActive
-                    ? 'bg-emerald-700 text-white'
-                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`
-              }
-            >
-              {({ isActive }) => (
-                <>
-                  <Icon size={18} className={isActive ? 'text-white' : 'text-slate-400'} />
-                  {item.label}
-                </>
-              )}
-            </NavLink>
-          )
-        })}
+      {/* Nav (text only, as in the reference screens) */}
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3">
+        {items.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.end}
+            onClick={onNavigate}
+            className={({ isActive }) =>
+              `block rounded-xl px-4 py-2.5 text-[15px] transition-colors ${
+                isActive ? 'bg-ink font-medium text-white' : 'text-slate-700 hover:bg-[#f3f1ea] hover:text-dark'
+              }`
+            }
+          >
+            {item.label}
+          </NavLink>
+        ))}
       </nav>
 
       {/* Footer: user + sign out */}
-      <div className="border-t border-slate-200 px-3 py-3">
-        <div className="flex items-center gap-3 px-2 py-1.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-700 text-xs font-semibold text-white">
-            {user ? initials(user.name) : '—'}
-          </div>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-slate-900">{user?.name}</div>
-            <div className="truncate text-xs text-slate-500">{user?.role}</div>
-          </div>
-        </div>
-        <button
-          onClick={logout}
-          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 hover:text-slate-900"
-        >
-          <LogOut size={18} className="text-slate-400" />
+      <div className="px-6 py-5">
+        <div className="truncate text-[15px] font-semibold text-dark">{user?.name}</div>
+        <button onClick={logout} className="mt-0.5 text-sm text-slate-500 hover:text-dark hover:underline">
           Sign out
         </button>
       </div>

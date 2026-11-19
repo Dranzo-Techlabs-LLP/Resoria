@@ -1,15 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ROOMS } from '../lib/config'
-import { api, ApiError, setToken, type BookingWrite, type UserWrite } from '../lib/api'
+import {
+  api, ApiError, setToken, type AdjustmentWrite, type BookingWrite, type ChargeWrite, type ItemWrite, type PurchaseWrite,
+  type UsageWrite, type UserWrite,
+} from '../lib/api'
+import { roomBalance, roomPaid } from '../lib/booking'
 import { useAuth } from '../auth/AuthContext'
-import type { AppData, Booking, BookingStatus, Expense, InvoiceSettings, Payment, RoomOverride } from '../types'
+import type { AppData, AppSettings, Booking, BookingStatus, Expense, InventoryData, InvoiceSettings, Payment, RoomOverride, SettingsKey } from '../types'
 
+/** Room money received (payments − refunds; additional-expense collections are kept apart). */
 export function paidOf(b: Booking): number {
-  return b.payments.reduce((s, p) => s + (p.kind === 'refund' ? -p.amount : p.amount), 0)
+  return roomPaid(b)
 }
-/** What the guest still owes: a B2B commission the partner collected externally counts as settled. */
+/** What the guest still owes for the room: a B2B commission the partner collected externally counts as settled. */
 export function balanceOf(b: Booking): number {
-  return b.total - paidOf(b) - (b.b2bExternal ?? 0)
+  return roomBalance(b)
 }
 /** Category that represents B2B partner commission (excluded from "operating" expenses). */
 export const B2B_CATEGORY = 'B2B Commission'
@@ -32,7 +37,16 @@ function emptyData(): AppData {
     roles: [],
     invoice: { prefix: 'RE-', next: 1, padding: 5, terms: '' },
     villaOverrides: {},
+    settings: emptySettings(),
+    inventory: { items: [], movements: [], purchases: [] },
   }
+}
+export function emptySettings(): AppSettings {
+  return { agents: [], otaPlatforms: [], referrers: [], menuItems: [], hallRates: [], departments: [] }
+}
+/** Older servers send bookings without these lists. */
+function normalizeBooking(b: Booking): Booking {
+  return { ...b, charges: b.charges ?? [], events: b.events ?? [] }
 }
 
 interface StoreValue {
@@ -60,6 +74,26 @@ interface StoreValue {
   setBookingStatus: (ref: string, status: BookingStatus) => Promise<void>
   /** Throws on failure so the Rooms form can show the message. */
   saveVillaOverride: (name: string, data: RoomOverride) => Promise<void>
+
+  // ---- Change-sheet actions. All of these THROW on failure (show the message in the form / popup). ----
+  /** Record a payment or refund and throw on failure (the older addPayment shows a banner instead). */
+  recordPayment: (ref: string, p: Omit<Payment, 'id'>) => Promise<void>
+  checkIn: (ref: string) => Promise<void>
+  checkOut: (ref: string) => Promise<void>
+  cancelBooking: (ref: string, cancellationCharge: number) => Promise<void>
+  addCharge: (ref: string, c: ChargeWrite) => Promise<void>
+  updateCharge: (id: string, c: ChargeWrite) => Promise<void>
+  deleteCharge: (id: string) => Promise<void>
+  collectCharges: (ref: string, p: { method: string; date: string; reference?: string }) => Promise<void>
+  saveSettings: <K extends SettingsKey>(key: K, value: AppSettings[K]) => Promise<void>
+  addItem: (i: ItemWrite) => Promise<string>
+  updateItem: (id: string, i: Partial<ItemWrite>) => Promise<void>
+  /** Returns the purchase reference (PUR-00001). */
+  addPurchase: (p: PurchaseWrite) => Promise<string>
+  /** Returns the usage reference (USE-00001). */
+  addUsage: (u: UsageWrite) => Promise<string>
+  /** Returns the adjustment reference (ADJ-00001). */
+  addAdjustment: (a: AdjustmentWrite) => Promise<string>
 }
 
 const StoreContext = createContext<StoreValue | undefined>(undefined)
@@ -74,7 +108,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setLoading(true)
     setError(null)
     return api.bootstrap()
-      .then((d) => setData({ ...emptyData(), ...d }))
+      .then((d) => setData({
+        ...emptyData(), ...d,
+        settings: { ...emptySettings(), ...(d.settings ?? {}) },
+        bookings: (d.bookings ?? []).map(normalizeBooking),
+      }))
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 401) {
           setToken(null)
@@ -162,8 +200,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const replaceBooking = (booking: Booking) =>
+  const replaceBooking = (raw: Booking) => {
+    const booking = normalizeBooking(raw)
     setData((d) => ({ ...d, bookings: d.bookings.map((b) => (b.ref === booking.ref ? booking : b)) }))
+  }
 
   const addPayment = useCallback((ref: string, p: Omit<Payment, 'id'>) => guard(async () => {
     const { booking } = await api.addPayment(ref, p)
@@ -181,8 +221,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }), [guard])
 
   const setBookingStatus = useCallback((ref: string, status: BookingStatus) => guard(async () => {
-    const { booking } = await api.setBookingStatus(ref, status)
-    setData((d) => ({ ...d, bookings: d.bookings.map((b) => (b.ref === ref ? booking : b)) }))
+    replaceBooking((await api.setBookingStatus(ref, status)).booking)
   }), [guard])
 
   // Rooms: show what the server stored. An older server doesn't send it back
@@ -201,23 +240,62 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  /** Throws on failure (the form shows the message). Returns the new booking's ref. */
   const createBooking = useCallback(async (input: BookingWrite) => {
-    try {
-      const { ref, booking } = await api.createBooking(input)
-      setData((d) => ({ ...d, bookings: [booking, ...d.bookings], invoice: { ...d.invoice, next: d.invoice.next + 1 } }))
-      await load() // pull in the linked B2B expense before the booking page opens
-      return ref
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not create the booking.')
-      return ''
-    }
+    const { ref, booking } = await api.createBooking(input)
+    setData((d) => ({ ...d, bookings: [normalizeBooking(booking), ...d.bookings], invoice: { ...d.invoice, next: d.invoice.next + 1 } }))
+    await load() // pull in linked expenses before the booking page opens
+    return ref
   }, [load])
 
-  const updateBooking = useCallback((ref: string, fields: BookingWrite) => guard(async () => {
+  /** Throws on failure (the form shows the message). */
+  const updateBooking = useCallback(async (ref: string, fields: BookingWrite) => {
     const { booking } = await api.updateBooking(ref, fields)
-    setData((d) => ({ ...d, bookings: d.bookings.map((b) => (b.ref === ref ? booking : b)) }))
+    setData((d) => ({ ...d, bookings: d.bookings.map((b) => (b.ref === ref ? normalizeBooking(booking) : b)) }))
     await load() // refresh payments/expenses (B2B commission) before the booking page opens
-  }), [guard, load])
+  }, [load])
+
+  // ---- Change-sheet actions (throw on failure) ----
+  const recordPayment = useCallback(async (ref: string, p: Omit<Payment, 'id'>) => {
+    replaceBooking((await api.addPayment(ref, p)).booking)
+  }, [])
+  const checkIn = useCallback(async (ref: string) => { replaceBooking((await api.checkIn(ref)).booking) }, [])
+  const checkOut = useCallback(async (ref: string) => { replaceBooking((await api.checkOut(ref)).booking) }, [])
+  const cancelBooking = useCallback(async (ref: string, charge: number) => {
+    replaceBooking((await api.cancelBooking(ref, charge)).booking)
+  }, [])
+  const addCharge = useCallback(async (ref: string, c: ChargeWrite) => { replaceBooking((await api.addCharge(ref, c)).booking) }, [])
+  const updateCharge = useCallback(async (id: string, c: ChargeWrite) => { replaceBooking((await api.updateCharge(id, c)).booking) }, [])
+  const deleteCharge = useCallback(async (id: string) => { replaceBooking((await api.deleteCharge(id)).booking) }, [])
+  const collectCharges = useCallback(async (ref: string, p: { method: string; date: string; reference?: string }) => {
+    replaceBooking((await api.collectCharges(ref, p)).booking)
+  }, [])
+  const saveSettings = useCallback(async <K extends SettingsKey>(key: K, value: AppSettings[K]) => {
+    const { settings } = await api.saveSettings(key, value)
+    setData((d) => ({ ...d, settings: { ...emptySettings(), ...settings } }))
+  }, [])
+  const setInventory = (inventory: InventoryData) => setData((d) => ({ ...d, inventory }))
+  const addItem = useCallback(async (i: ItemWrite) => {
+    const r = await api.addItem(i)
+    setInventory(r.inventory)
+    return r.item.id
+  }, [])
+  const updateItem = useCallback(async (id: string, i: Partial<ItemWrite>) => { setInventory((await api.updateItem(id, i)).inventory) }, [])
+  const addPurchase = useCallback(async (p: PurchaseWrite) => {
+    const r = await api.addPurchase(p)
+    setData((d) => ({ ...d, inventory: r.inventory, expenses: r.expense ? [r.expense, ...d.expenses] : d.expenses }))
+    return r.ref
+  }, [])
+  const addUsage = useCallback(async (u: UsageWrite) => {
+    const r = await api.addUsage(u)
+    setInventory(r.inventory)
+    return r.ref
+  }, [])
+  const addAdjustment = useCallback(async (a: AdjustmentWrite) => {
+    const r = await api.addAdjustment(a)
+    setInventory(r.inventory)
+    return r.ref
+  }, [])
 
   const deleteBooking = useCallback((ref: string) => guard(async () => {
     await api.deleteBooking(ref)
@@ -248,7 +326,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     data: view, loading, error, clearError, reload: load,
     addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole,
     saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
-  }), [view, loading, error, clearError, load, addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole, saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride])
+    recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
+    addItem, updateItem, addPurchase, addUsage, addAdjustment,
+  }), [view, loading, error, clearError, load, addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole, saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
+    recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
+    addItem, updateItem, addPurchase, addUsage, addAdjustment])
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }

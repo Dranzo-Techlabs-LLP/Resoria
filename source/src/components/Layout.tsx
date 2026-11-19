@@ -37,6 +37,7 @@ export function Layout() {
 
   useEffect(() => {
     setMobileOpen(false)
+    window.scrollTo(0, 0) // a new page starts at the top (not where the last one was scrolled)
   }, [location.pathname])
 
   useEffect(() => {

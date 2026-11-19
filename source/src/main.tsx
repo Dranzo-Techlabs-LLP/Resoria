@@ -5,6 +5,7 @@ import './index.css'
 import App from './App.tsx'
 import { StoreProvider } from './data/store'
 import { AuthProvider } from './auth/AuthContext'
+import { ToastProvider } from './components/ui/Toast'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -12,7 +13,9 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
       <AuthProvider>
         <StoreProvider>
-          <App />
+          <ToastProvider>
+            <App />
+          </ToastProvider>
         </StoreProvider>
       </AuthProvider>
     </BrowserRouter>

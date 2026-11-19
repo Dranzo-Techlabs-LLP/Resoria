@@ -173,7 +173,13 @@ find $WEB -mindepth 1 -type d -exec chmod 755 {} +
 find $WEB -mindepth 1 -type f -not -name config.php -exec chmod 644 {} +
 ```
 
-`config.php` and the database are left exactly as they are.
+`config.php` and the data are left as they are. Database changes that come with an
+update (new tables and columns) apply themselves on the first API request after it,
+so there's no SQL to run by hand; they only add, never remove.
+
+Uploaded guest ID proofs and purchase bills are kept in `public_html/api/uploads/`
+(blocked from direct download; the app fetches them with a signed-in session).
+The update above doesn't touch that folder, and the backup includes it.
 
 ## Roll back
 

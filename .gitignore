@@ -12,6 +12,8 @@ next-env.d.ts
 
 # Server settings: database password. Lives only on the server (see DEPLOY.md, step 5)
 /api/config.php
+# Uploaded ID proofs and purchase bills (server data, never committed)
+/api/uploads/
 error_log
 *.log
 

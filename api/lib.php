@@ -16,8 +16,15 @@ use PDO;
 
 /** Rooms whose capacity can be changed on the Rooms page (editableCapacity in src/lib/config.ts). */
 const CAPACITY_ROOMS = [
-  'Haven', 'Solace', 'Elysian', 'Sylvane', 'Zephyr', 'K1', 'K2', 'K3', 'K4', 'R1', 'R2', 'R3', 'Cave Room', 'Dormitory', 'DJ Hall', 'Conference Hall',
+  'Haven', 'Elysian', 'Solace', 'Sylvane', 'Zephyr', 'S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'Dorm 1', 'Dorm 2', 'Party Hall',
 ];
+
+// Times are stored in the resort's local time (India)
+if (!ini_get('date.timezone') || date_default_timezone_get() === 'UTC') date_default_timezone_set('Asia/Kolkata');
+
+function now_dt(): string {
+  return date('Y-m-d H:i:s');
+}
 
 function cors(): void {
   $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
@@ -160,6 +167,7 @@ function expense_shape(array $e): array {
     'id' => $e['id'], 'date' => $e['date'], 'category' => $e['category'], 'villa' => $e['villa'],
     'bookingRef' => $e['booking_ref'] ?? null, 'description' => $e['description'], 'amount' => (int)$e['amount'],
     'external' => (int)($e['external'] ?? 0) === 1, // B2B commission collected externally (false before the migration)
+    'sourceRef' => $e['source_ref'] ?? null,         // e.g. PUR-00003 (inventory purchase)
   ];
 }
 
@@ -250,7 +258,8 @@ function get_user(string $id): ?array {
   return $u ? public_user($u) : null;
 }
 
-function booking_shape(array $b, array $payments): array {
+function booking_shape(array $b, array $payments, array $charges = [], array $events = []): array {
+  $int = fn($v) => $v === null || $v === '' ? null : (int)$v;
   return [
     'id'        => $b['id'],
     'ref'       => $b['ref'],
@@ -268,11 +277,29 @@ function booking_shape(array $b, array $payments): array {
     'total'     => (int)$b['total'],
     'source'    => $b['source'],
     'notes'     => $b['notes'] ?? '',
-    'createdAt' => $b['created_at'],
+    'createdAt' => substr((string)$b['created_at'], 0, 10),
     'payments'  => array_map(fn($p) => [
       'id' => $p['id'], 'date' => $p['date'], 'amount' => (int)$p['amount'], 'kind' => $p['kind'], 'method' => $p['method'] ?? '', 'reference' => $p['reference'] ?? '',
       'advance' => (int)($p['is_advance'] ?? 0) === 1,
+      'purpose' => ($p['purpose'] ?? 'room') === 'extras' ? 'extras' : 'room',
+      'createdAt' => $p['created_at'] ?? '',
     ], $payments),
+    // change-sheet fields (null / '' on older rows)
+    'place'              => $b['place'] ?? '',
+    'documentName'       => $b['document_name'] ?? '',
+    'sourceDetail'       => $b['source_detail'] ?? '',
+    'originalTotal'      => $int($b['original_total'] ?? null) ?? (int)$b['total'],
+    'commission'         => $int($b['commission'] ?? null) ?? 0,
+    'checkedInAt'        => $b['checked_in_at'] ?? '',
+    'checkedOutAt'       => $b['checked_out_at'] ?? '',
+    'completedAt'        => $b['completed_at'] ?? '',
+    'cancelledAt'        => $b['cancelled_at'] ?? '',
+    'cancellationCharge' => $int($b['cancellation_charge'] ?? null) ?? 0,
+    'charges' => array_map(fn($c) => [
+      'id' => $c['id'], 'category' => $c['category'], 'item' => $c['item'], 'qty' => (int)$c['qty'],
+      'rate' => (int)$c['rate'], 'total' => (int)$c['total'], 'at' => $c['at'], 'paymentId' => $c['payment_id'] ?? null,
+    ], $charges),
+    'events' => array_map(fn($e) => ['id' => $e['id'], 'at' => $e['at'], 'text' => $e['text']], $events),
   ];
 }
 
@@ -281,20 +308,33 @@ function get_booking(string $ref): ?array {
   $st->execute([$ref]);
   $b = $st->fetch();
   if (!$b) return null;
-  $ps = db()->prepare('SELECT * FROM payments WHERE booking_ref = ? ORDER BY date ASC, id ASC');
-  $ps->execute([$ref]);
-  return booking_shape($b, $ps->fetchAll());
+  $ref = $b['ref'];
+  $q = function (string $sql) use ($ref) {
+    $st = db()->prepare($sql);
+    $st->execute([$ref]);
+    return $st->fetchAll();
+  };
+  return booking_shape(
+    $b,
+    $q('SELECT * FROM payments WHERE booking_ref = ? ORDER BY date ASC, seq ASC'),
+    $q('SELECT * FROM booking_charges WHERE booking_ref = ? ORDER BY at ASC, seq ASC'),
+    $q('SELECT * FROM booking_events WHERE booking_ref = ? ORDER BY at ASC, seq ASC'),
+  );
 }
 
 function bootstrap_payload(): array {
   $pdo = db();
 
   $bookings = $pdo->query('SELECT * FROM bookings ORDER BY created_at DESC, ref DESC')->fetchAll();
-  $byRef = [];
-  foreach ($pdo->query('SELECT * FROM payments ORDER BY date ASC, id ASC')->fetchAll() as $p) {
-    $byRef[$p['booking_ref']][] = $p;
-  }
-  $bk = array_map(fn($b) => booking_shape($b, $byRef[$b['ref']] ?? []), $bookings);
+  $group = function (string $sql) use ($pdo): array {
+    $out = [];
+    foreach ($pdo->query($sql)->fetchAll() as $r) $out[$r['booking_ref']][] = $r;
+    return $out;
+  };
+  $byRef = $group('SELECT * FROM payments ORDER BY date ASC, seq ASC');
+  $chargesBy = $group('SELECT * FROM booking_charges ORDER BY at ASC, seq ASC');
+  $eventsBy = $group('SELECT * FROM booking_events ORDER BY at ASC, seq ASC');
+  $bk = array_map(fn($b) => booking_shape($b, $byRef[$b['ref']] ?? [], $chargesBy[$b['ref']] ?? [], $eventsBy[$b['ref']] ?? []), $bookings);
 
   $expenses = array_map(fn($e) => expense_shape($e), $pdo->query('SELECT * FROM expenses ORDER BY date DESC, id DESC')->fetchAll());
 
@@ -322,5 +362,447 @@ function bootstrap_payload(): array {
     'roles'         => $roles,
     'invoice'       => $invoice,
     'villaOverrides' => (object)$overrides,   // force {} not [] when empty
+    'settings'      => settings_payload(),
+    'inventory'     => inventory_payload(),
   ];
+}
+
+// ==================================================================
+//  Change-sheet features: schema updates, stay history, additional
+//  expenses, uploads, configuration lists, inventory.
+// ==================================================================
+
+/** Bump when ensure_schema() gains steps. */
+const SCHEMA_VERSION = 4;
+
+function column_exists(string $table, string $col): bool {
+  $st = db()->prepare('SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
+  $st->execute([$table, $col]);
+  return (bool)$st->fetch();
+}
+function add_column(string $table, string $col, string $def): void {
+  if (!column_exists($table, $col)) db()->exec("ALTER TABLE `$table` ADD COLUMN `$col` $def");
+}
+
+/**
+ * Brings the database up to SCHEMA_VERSION. Safe to run any number of times:
+ * every step only adds what's missing and keeps existing data. Runs on the
+ * first API request after a deploy (one cheap query on every other request),
+ * so updates need no manual SQL.
+ */
+function ensure_schema(bool $force = false): void {
+  $pdo = db();
+  if (!$force) {
+    try {
+      $v = $pdo->query("SELECT v FROM app_settings WHERE k = 'schema_version'")->fetchColumn();
+      if ((int)$v >= SCHEMA_VERSION) return;
+    } catch (\Throwable $e) { /* table missing: run the steps */ }
+  }
+
+  $pdo->exec("CREATE TABLE IF NOT EXISTS app_settings (
+    k VARCHAR(60) PRIMARY KEY,
+    v MEDIUMTEXT NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS counters (
+    name VARCHAR(20) PRIMARY KEY,
+    next INT NOT NULL DEFAULT 1
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS booking_events (
+    seq INT AUTO_INCREMENT PRIMARY KEY,
+    id VARCHAR(32) NOT NULL,
+    booking_ref VARCHAR(40) NOT NULL,
+    at DATETIME NOT NULL,
+    text VARCHAR(500) NOT NULL,
+    INDEX (booking_ref)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS booking_charges (
+    seq INT NOT NULL AUTO_INCREMENT UNIQUE,  -- entry order
+    id VARCHAR(32) PRIMARY KEY,
+    booking_ref VARCHAR(40) NOT NULL,
+    category VARCHAR(30) NOT NULL,
+    item VARCHAR(160) NOT NULL,
+    qty INT NOT NULL DEFAULT 1,
+    rate INT NOT NULL DEFAULT 0,
+    total INT NOT NULL DEFAULT 0,
+    at DATETIME NOT NULL,
+    payment_id VARCHAR(32) NULL,
+    INDEX (booking_ref)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS inventory_items (
+    id VARCHAR(20) PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    category VARCHAR(60) NOT NULL,
+    unit VARCHAR(20) NOT NULL,
+    min_stock DECIMAL(12,2) NOT NULL DEFAULT 0,
+    opening_stock DECIMAL(12,2) NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS stock_movements (
+    seq INT NOT NULL AUTO_INCREMENT UNIQUE,  -- entry order (several movements can share a second)
+    id VARCHAR(32) PRIMARY KEY,
+    ref VARCHAR(20) NOT NULL,
+    item_id VARCHAR(20) NOT NULL,
+    type VARCHAR(10) NOT NULL,              -- in / out / adjust
+    qty DECIMAL(12,2) NOT NULL,             -- positive for in / out, signed for adjust
+    rate DECIMAL(12,2) NULL,
+    amount INT NULL,
+    date DATE NOT NULL,
+    department VARCHAR(60) NULL,
+    supplier VARCHAR(120) NULL,
+    note VARCHAR(255) NULL,
+    prev_balance DECIMAL(12,2) NOT NULL,
+    balance DECIMAL(12,2) NOT NULL,
+    created_at DATETIME NOT NULL,
+    INDEX (item_id), INDEX (ref), INDEX (date)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+  $pdo->exec("CREATE TABLE IF NOT EXISTS stock_purchases (
+    ref VARCHAR(20) PRIMARY KEY,
+    date DATE NOT NULL,
+    supplier VARCHAR(120) NOT NULL DEFAULT '',
+    bill_name VARCHAR(255) NULL,
+    bill_path VARCHAR(255) NULL,
+    total INT NOT NULL DEFAULT 0,
+    paid_amount INT NOT NULL DEFAULT 0,
+    payment_status VARCHAR(20) NOT NULL DEFAULT 'Unpaid',
+    expense_id VARCHAR(32) NULL,
+    created_at DATETIME NOT NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+  add_column('stock_movements', 'seq', 'INT NOT NULL AUTO_INCREMENT UNIQUE FIRST');
+  add_column('booking_charges', 'seq', 'INT NOT NULL AUTO_INCREMENT UNIQUE FIRST');
+  add_column('payments', 'seq', 'INT NOT NULL AUTO_INCREMENT UNIQUE FIRST'); // entry order (several can share a second)
+  add_column('bookings', 'place', 'VARCHAR(120) NULL');
+  add_column('bookings', 'document_name', 'VARCHAR(255) NULL');
+  add_column('bookings', 'document_path', 'VARCHAR(255) NULL');
+  add_column('bookings', 'source_detail', 'VARCHAR(120) NULL');
+  add_column('bookings', 'original_total', 'INT NULL');
+  add_column('bookings', 'commission', 'INT NULL');
+  add_column('bookings', 'checked_in_at', 'DATETIME NULL');
+  add_column('bookings', 'checked_out_at', 'DATETIME NULL');
+  add_column('bookings', 'completed_at', 'DATETIME NULL');
+  add_column('bookings', 'cancelled_at', 'DATETIME NULL');
+  add_column('bookings', 'cancellation_charge', 'INT NULL');
+  $pdo->exec("ALTER TABLE bookings MODIFY source VARCHAR(40) NOT NULL DEFAULT 'Direct'");
+  add_column('payments', 'purpose', "VARCHAR(10) NOT NULL DEFAULT 'room'");
+  add_column('payments', 'created_at', 'DATETIME NULL');
+  add_column('expenses', 'source_ref', 'VARCHAR(40) NULL');
+  add_column('expenses', 'external', 'TINYINT(1) NOT NULL DEFAULT 0');
+
+  // Starting lists (only when never saved): departments and the usual OTA platforms
+  $seed = $pdo->prepare('INSERT IGNORE INTO app_settings (k, v) VALUES (?, ?)');
+  $seed->execute(['departments', json_encode(['Housekeeping', 'Kitchen', 'Front Office', 'Maintenance', 'Pool & Outdoor'])]);
+  $seed->execute(['otaPlatforms', json_encode(array_map(
+    fn($n) => ['id' => 'ota' . substr(md5($n), 0, 8), 'name' => $n, 'active' => true],
+    ['Booking.com', 'Agoda', 'MakeMyTrip', 'Airbnb', 'Goibibo']
+  ))]);
+
+  // New rights (inventory, configuration) for the built-in roles that should have them
+  $grant = [
+    'Administrator' => ['view_inventory', 'edit_inventory', 'manage_config'],
+    'Manager'       => ['view_inventory', 'edit_inventory'],
+    'Owner'         => ['view_inventory'],
+  ];
+  $marker = $pdo->query("SELECT v FROM app_settings WHERE k = 'rights_v2'")->fetchColumn();
+  if ($marker === false) {
+    foreach ($grant as $role => $add) {
+      $st = $pdo->prepare('SELECT id, rights FROM roles WHERE name = ?');
+      $st->execute([$role]);
+      $r = $st->fetch();
+      if (!$r) continue;
+      $rights = json_decode($r['rights'], true) ?: [];
+      $rights = array_values(array_unique(array_merge($rights, $add)));
+      $pdo->prepare('UPDATE roles SET rights = ? WHERE id = ?')->execute([json_encode($rights), $r['id']]);
+    }
+    $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('rights_v2', '1')")->execute();
+  }
+
+  $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")
+      ->execute([(string)SCHEMA_VERSION]);
+}
+
+// ---------------- Formatting ----------------
+
+/** ₹1,40,000 (Indian digit grouping), as the app shows money. */
+function inr(int $n): string {
+  $neg = $n < 0;
+  $s = (string)abs($n);
+  if (strlen($s) > 3) {
+    $last3 = substr($s, -3);
+    $rest = substr($s, 0, -3);
+    $rest = preg_replace('/\B(?=(\d{2})+(?!\d))/', ',', $rest);
+    $s = "$rest,$last3";
+  }
+  return ($neg ? '−' : '') . '₹' . $s;
+}
+
+// ---------------- Stay history ----------------
+
+function add_event(string $ref, string $text, ?string $at = null): void {
+  db()->prepare('INSERT INTO booking_events (id, booking_ref, at, text) VALUES (?,?,?,?)')
+      ->execute([gen_id('h'), $ref, $at ?? now_dt(), mb_substr($text, 0, 500)]);
+}
+
+// ---------------- Booking money (server-side mirror of src/lib/booking.ts) ----------------
+
+function booking_row(string $ref): array {
+  $st = db()->prepare('SELECT * FROM bookings WHERE ref = ?');
+  $st->execute([$ref]);
+  $b = $st->fetch();
+  if (!$b) fail('Booking not found.', 404);
+  return $b;
+}
+/** Room balance still owed: total − room payments + refunds − B2B commission collected externally. */
+function room_balance(array $b): int {
+  $st = db()->prepare("SELECT
+      COALESCE(SUM(CASE WHEN kind = 'payment' AND purpose <> 'extras' THEN amount ELSE 0 END), 0) AS paid,
+      COALESCE(SUM(CASE WHEN kind = 'refund' THEN amount ELSE 0 END), 0) AS refunded
+    FROM payments WHERE booking_ref = ?");
+  $st->execute([$b['ref']]);
+  $m = $st->fetch();
+  $ext = db()->prepare("SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE booking_ref = ? AND category = 'B2B Commission' AND `external` = 1");
+  $ext->execute([$b['ref']]);
+  return (int)$b['total'] - (int)$m['paid'] + (int)$m['refunded'] - (int)$ext->fetchColumn();
+}
+function room_received(string $ref): int {
+  $st = db()->prepare("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE booking_ref = ? AND kind = 'payment' AND purpose <> 'extras'");
+  $st->execute([$ref]);
+  return (int)$st->fetchColumn();
+}
+function charges_due(string $ref): int {
+  $st = db()->prepare('SELECT COALESCE(SUM(total), 0) FROM booking_charges WHERE booking_ref = ? AND payment_id IS NULL');
+  $st->execute([$ref]);
+  return (int)$st->fetchColumn();
+}
+function is_pre_arrival(string $status): bool {
+  return !in_array($status, ['checked in', 'completed', 'cancelled'], true);
+}
+
+/** Event text for a new additional expense. */
+function charge_event_text(string $category, string $item, int $qty, int $rate, int $total): string {
+  if ($category === 'Food') return "Restaurant order: $item × $qty · " . inr($total);
+  if ($category === 'Conference Hall') {
+    $what = preg_replace('/^Conference Hall\s*·\s*/', '', $item);
+    return "Conference Hall booked · $what · " . inr($total);
+  }
+  return "Service: $item" . ($qty > 1 ? " × $qty" : '') . ' · ' . inr($total);
+}
+
+// ---------------- Uploads (ID proof, purchase bills) ----------------
+
+function upload_dir(): string {
+  $dir = defined('UPLOAD_DIR') ? (string)UPLOAD_DIR : __DIR__ . '/uploads';
+  if (!is_dir($dir)) {
+    if (!@mkdir($dir, 0750, true) && !is_dir($dir)) fail('The upload folder could not be created.', 500);
+  }
+  // Never serve uploads directly (Apache); they go through the API with a session.
+  if (!is_file("$dir/.htaccess")) @file_put_contents("$dir/.htaccess", "Require all denied\nDeny from all\n");
+  return $dir;
+}
+
+/** Validates and stores a {name, type, data(base64)} upload. Returns [displayName, storedFileName]. */
+function store_upload($file, string $prefix): array {
+  if (!is_array($file) || !isset($file['data'], $file['name'])) fail('The attached file is missing.');
+  $bytes = base64_decode((string)$file['data'], true);
+  if ($bytes === false || $bytes === '') fail('The attached file could not be read.');
+  if (strlen($bytes) > 5 * 1024 * 1024) fail('The attached file is larger than 5 MB.');
+  $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bytes) ?: '';
+  $ext = ['application/pdf' => 'pdf', 'image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'][$mime] ?? null;
+  if (!$ext) fail('Attach a PDF, JPG, PNG or WEBP file.');
+  $name = trim(preg_replace('/[^\w .()\-]+/u', '_', (string)$file['name'])) ?: "document.$ext";
+  $stored = $prefix . '-' . bin2hex(random_bytes(12)) . ".$ext";
+  if (@file_put_contents(upload_dir() . "/$stored", $bytes) === false) fail('The attached file could not be saved.', 500);
+  return [mb_substr($name, 0, 200), $stored];
+}
+
+function delete_upload(?string $stored): void {
+  if ($stored && preg_match('/^[\w-]+\.(pdf|jpg|png|webp)$/', $stored)) @unlink(upload_dir() . "/$stored");
+}
+
+/** Streams a stored upload to the browser and exits. */
+function send_upload(?string $stored, ?string $name): void {
+  if (!$stored || !preg_match('/^[\w-]+\.(pdf|jpg|png|webp)$/', $stored, $m) || !is_file(upload_dir() . "/$stored")) {
+    fail('File not found.', 404);
+  }
+  $types = ['pdf' => 'application/pdf', 'jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'];
+  $safe = str_replace(['"', "\r", "\n"], '', (string)($name ?: $stored));
+  header('Content-Type: ' . $types[$m[1]]);
+  header('Content-Length: ' . filesize(upload_dir() . "/$stored"));
+  header("Content-Disposition: inline; filename=\"$safe\"; filename*=UTF-8''" . rawurlencode((string)($name ?: $stored)));
+  header('X-Content-Type-Options: nosniff');
+  header('Cache-Control: private, no-store');
+  readfile(upload_dir() . "/$stored");
+  exit;
+}
+
+// ---------------- Counters (PUR-00001, USE-00001, ADJ-00001, INV-0001) ----------------
+
+/** Next number of a series; call inside a transaction. */
+function next_number(string $name): int {
+  $pdo = db();
+  $pdo->prepare('INSERT IGNORE INTO counters (name, next) VALUES (?, 1)')->execute([$name]);
+  $st = $pdo->prepare('SELECT next FROM counters WHERE name = ? FOR UPDATE');
+  $st->execute([$name]);
+  $n = (int)$st->fetchColumn();
+  $pdo->prepare('UPDATE counters SET next = next + 1 WHERE name = ?')->execute([$name]);
+  return $n;
+}
+
+// ---------------- Configuration lists ----------------
+
+const SETTINGS_KEYS = ['agents', 'otaPlatforms', 'referrers', 'menuItems', 'hallRates', 'departments'];
+
+function settings_payload(): array {
+  $out = array_fill_keys(SETTINGS_KEYS, []);
+  foreach (db()->query('SELECT k, v FROM app_settings')->fetchAll() as $r) {
+    if (in_array($r['k'], SETTINGS_KEYS, true)) $out[$r['k']] = json_decode($r['v'], true) ?: [];
+  }
+  return $out;
+}
+
+/** Validates one configuration list and returns it cleaned. */
+function clean_settings(string $key, $value): array {
+  if (!is_array($value) || array_keys($value) !== range(0, count($value) - 1) && count($value) > 0) fail('Send the list as an array.');
+  $str = fn($v, int $max = 120) => mb_substr(trim((string)$v), 0, $max);
+  $num = function ($v, string $what) {
+    if (!is_numeric($v) || (float)$v < 0 || (float)$v > 100000000) fail("Enter a valid $what.");
+    return round((float)$v, 2);
+  };
+  $id = fn($v) => preg_match('/^[\w-]{1,40}$/', (string)$v) ? (string)$v : gen_id('c');
+  $out = [];
+  $seen = [];
+  foreach ($value as $row) {
+    if ($key === 'departments') {
+      $name = $str($row, 60);
+      if ($name === '') fail('Department names are required.');
+      if (isset($seen[mb_strtolower($name)])) fail("“$name” is listed twice.");
+      $seen[mb_strtolower($name)] = 1;
+      $out[] = $name;
+      continue;
+    }
+    if (!is_array($row)) fail('Invalid list entry.');
+    if ($key === 'hallRates') {
+      $hours = (int)($row['hours'] ?? 0);
+      if ($hours < 1 || $hours > 24) fail('Hall durations must be between 1 and 24 hours.');
+      if (isset($seen[$hours])) fail("$hours hour(s) is listed twice.");
+      $seen[$hours] = 1;
+      $out[] = ['hours' => $hours, 'price' => (int)round($num($row['price'] ?? null, 'price'))];
+      continue;
+    }
+    $name = $str($row['name'] ?? '');
+    if ($name === '') fail('Names are required.');
+    if (isset($seen[mb_strtolower($name)])) fail("“$name” is listed twice.");
+    $seen[mb_strtolower($name)] = 1;
+    $entry = ['id' => $id($row['id'] ?? ''), 'name' => $name, 'active' => !empty($row['active'])];
+    if ($key === 'menuItems') $entry['price'] = (int)round($num($row['price'] ?? null, 'price'));
+    if ($key === 'agents') {
+      $type = ($row['commissionType'] ?? '') === 'flat' ? 'flat' : 'percent';
+      $val = $num($row['commissionValue'] ?? 0, 'commission');
+      if ($type === 'percent' && $val > 100) fail('A percent commission can be at most 100.');
+      $entry += ['commissionType' => $type, 'commissionValue' => $val, 'phone' => $str($row['phone'] ?? '', 40)];
+    }
+    $out[] = $entry;
+  }
+  if ($key === 'hallRates') usort($out, fn($a, $b) => $a['hours'] <=> $b['hours']);
+  return $out;
+}
+
+// ---------------- Inventory ----------------
+
+function f2($v): float {
+  return round((float)$v, 2);
+}
+
+function inventory_payload(): array {
+  $pdo = db();
+  $items = $pdo->query('SELECT * FROM inventory_items ORDER BY name ASC')->fetchAll();
+  $moves = $pdo->query('SELECT * FROM stock_movements ORDER BY date DESC, seq DESC')->fetchAll();
+  $sum = [];
+  $lastRate = [];
+  $opening = [];
+  foreach ($items as $i) $opening[$i['id']] = f2($i['opening_stock']);
+  // Running balances in date order (oldest first), so a back-dated entry reads correctly in the history
+  $chrono = array_reverse($moves);
+  foreach ($chrono as $k => $m) {
+    $q = f2($m['qty']);
+    $prev = f2(($opening[$m['item_id']] ?? 0) + ($sum[$m['item_id']] ?? 0));
+    $sum[$m['item_id']] = ($sum[$m['item_id']] ?? 0) + ($m['type'] === 'out' ? -$q : $q);
+    $chrono[$k]['prev_balance'] = $prev;
+    $chrono[$k]['balance'] = f2($prev + ($m['type'] === 'out' ? -$q : $q));
+    if ($m['type'] === 'in' && $m['rate'] !== null) $lastRate[$m['item_id']] = f2($m['rate']); // the last purchase rate wins
+  }
+  $moves = array_reverse($chrono);
+  return [
+    'items' => array_map(fn($i) => [
+      'id' => $i['id'], 'name' => $i['name'], 'category' => $i['category'], 'unit' => $i['unit'],
+      'minStock' => f2($i['min_stock']), 'openingStock' => f2($i['opening_stock']),
+      'available' => f2(f2($i['opening_stock']) + ($sum[$i['id']] ?? 0)),
+      'lastRate' => $lastRate[$i['id']] ?? 0, 'active' => (int)$i['active'] === 1, 'createdAt' => $i['created_at'],
+    ], $items),
+    'movements' => array_map(fn($m) => [
+      'id' => $m['id'], 'ref' => $m['ref'], 'itemId' => $m['item_id'], 'type' => $m['type'], 'qty' => f2($m['qty']),
+      'rate' => $m['rate'] === null ? null : f2($m['rate']), 'amount' => $m['amount'] === null ? null : (int)$m['amount'],
+      'date' => $m['date'], 'department' => $m['department'] ?? '', 'supplier' => $m['supplier'] ?? '', 'note' => $m['note'] ?? '',
+      'prevBalance' => f2($m['prev_balance']), 'balance' => f2($m['balance']), 'createdAt' => $m['created_at'],
+    ], $moves),
+    'purchases' => array_map(fn($p) => [
+      'ref' => $p['ref'], 'date' => $p['date'], 'supplier' => $p['supplier'], 'billName' => $p['bill_name'] ?? '',
+      'total' => (int)$p['total'], 'paidAmount' => (int)$p['paid_amount'], 'paymentStatus' => $p['payment_status'],
+      'expenseId' => $p['expense_id'] ?? null,
+    ], $pdo->query('SELECT * FROM stock_purchases ORDER BY date DESC, ref DESC')->fetchAll()),
+  ];
+}
+
+/** Locks an item row and returns it with its current available quantity. Call inside a transaction. */
+function lock_item(string $id): array {
+  $st = db()->prepare('SELECT * FROM inventory_items WHERE id = ? FOR UPDATE');
+  $st->execute([$id]);
+  $i = $st->fetch();
+  if (!$i) fail('Inventory item not found.', 404);
+  $m = db()->prepare("SELECT COALESCE(SUM(CASE WHEN type = 'out' THEN -qty ELSE qty END), 0) FROM stock_movements WHERE item_id = ?");
+  $m->execute([$id]);
+  $i['available'] = f2(f2($i['opening_stock']) + f2($m->fetchColumn()));
+  return $i;
+}
+
+function add_movement(array $item, string $ref, string $type, float $qty, array $extra = []): float {
+  $prev = $item['available'];
+  $bal = f2($prev + ($type === 'out' ? -$qty : $qty));
+  db()->prepare('INSERT INTO stock_movements (id, ref, item_id, type, qty, rate, amount, date, department, supplier, note, prev_balance, balance, created_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      ->execute([gen_id('m'), $ref, $item['id'], $type, $qty, $extra['rate'] ?? null, $extra['amount'] ?? null, $extra['date'],
+                 $extra['department'] ?? null, $extra['supplier'] ?? null, $extra['note'] ?? null, $prev, $bal, now_dt()]);
+  return $bal;
+}
+
+function valid_date($d): string {
+  $d = (string)$d;
+  if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) || !checkdate((int)substr($d, 5, 2), (int)substr($d, 8, 2), (int)substr($d, 0, 4))) {
+    fail('Enter a valid date.');
+  }
+  return $d;
+}
+function pos_qty($v, string $what = 'quantity'): float {
+  if (!is_numeric($v) || (float)$v <= 0 || (float)$v > 1000000) fail("Enter a $what greater than 0.");
+  return f2($v);
+}
+
+// ---------------- Room availability ----------------
+
+/** Rooms of a booking's villa value ("Haven", "S2, S3", or "Full Property" = every room). */
+function villa_rooms(string $villa): array {
+  if ($villa === 'Full Property') return CAPACITY_ROOMS;
+  return array_values(array_filter(array_map('trim', explode(',', $villa)), fn($r) => $r !== ''));
+}
+
+/** Fails when any of the rooms is already held by another booking on a night of [in, out). */
+function assert_rooms_free(string $villa, string $in, string $out, ?string $exceptRef = null): void {
+  $want = villa_rooms($villa);
+  $st = db()->prepare("SELECT ref, guest, villa, check_in, check_out FROM bookings
+                       WHERE status <> 'cancelled' AND check_in < ? AND check_out > ? AND ref <> ?");
+  $st->execute([$out, $in, $exceptRef ?? '']);
+  foreach ($st->fetchAll() as $o) {
+    $clash = array_values(array_intersect($want, villa_rooms($o['villa'])));
+    if ($clash) fail("{$clash[0]} is already booked by {$o['guest']} ({$o['ref']}) from {$o['check_in']} to {$o['check_out']}.", 409);
+  }
 }
