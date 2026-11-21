@@ -124,7 +124,7 @@ try {
     $st->execute([$token]);
     $bk = $st->fetch();
     if (!$bk) fail('This feedback link is not valid.', 404);
-    $done = db()->prepare("SELECT 1 FROM ratings WHERE booking_ref = ? AND source = 'Guest feedback link'");
+    $done = db()->prepare('SELECT 1 FROM ratings WHERE booking_ref = ?'); // one rating per stay
     $done->execute([$bk['ref']]);
     $submitted = (bool)$done->fetch();
     if ($method === 'GET') {
@@ -187,6 +187,14 @@ try {
       fail($source === 'B2B' ? 'Choose the agent.' : ($source === 'OTA' ? 'Choose the OTA platform.' : 'Choose who referred the booking.'));
     }
     $commission = $source === 'B2B' ? max(0, (int)round((float)$pick('commission', 'commission', 0))) : 0;
+    // Nightly rate per room when booked (group bookings split their revenue by it); only the booking's own rooms
+    $rooms = array_map('trim', explode(',', $villa));
+    $rates = array_key_exists('roomRates', $b) && is_array($b['roomRates'])
+      ? $b['roomRates'] : room_rates_of($cur['room_rates'] ?? null);
+    $roomRates = [];
+    foreach ($rates as $room => $rate) {
+      if (in_array((string)$room, $rooms, true) && is_numeric($rate) && $rate >= 0) $roomRates[(string)$room] = (int)round((float)$rate);
+    }
     return [
       'guest' => mb_substr($guest, 0, 160), 'phone' => mb_substr($phone, 0, 40),
       'alt_phone' => (trim((string)$pick('altPhone', 'alt_phone')) ?: null), 'email' => (trim((string)$pick('email', 'email')) ?: null),
@@ -196,6 +204,7 @@ try {
       'total' => $total, 'original_total' => (int)$orig, 'source' => mb_substr($source, 0, 40),
       'source_detail' => ($detail !== '' ? mb_substr($detail, 0, 120) : null), 'commission' => $commission,
       'notes' => (trim((string)$pick('notes', 'notes')) ?: null),
+      'room_rates' => $roomRates ? json_encode($roomRates) : null,
     ];
   };
   $methodOf = fn($m) => mb_substr(trim((string)($m ?? '')), 0, 20);
@@ -261,6 +270,18 @@ try {
     if (in_array($cur['status'], ['completed', 'cancelled'], true)) fail('Completed and cancelled bookings are read-only.');
     $b = body();
     $f = $bookingFields($b, $cur);
+    // In-house: only the guest details (name, phones, email, place, ID proof) can change
+    if ($cur['status'] === 'checked in') {
+      foreach (['villa' => 'rooms', 'checkIn' => 'check-in date', 'checkOut' => 'check-out date', 'total' => 'booking amount'] as $key => $label) {
+        $col = ['villa' => 'villa', 'checkIn' => 'check_in', 'checkOut' => 'check_out', 'total' => 'total'][$key];
+        if (array_key_exists($key, $b) && trim((string)$b[$key]) !== (string)$cur[$col]) fail("The guest is in-house, so only the guest details can be edited (not the $label).");
+      }
+      // everything but the guest details stays as it is
+      foreach (['villa', 'check_in', 'check_out', 'guests', 'adults', 'kids', 'total', 'original_total', 'source', 'source_detail', 'commission', 'notes', 'room_rates'] as $col) {
+        $f[$col] = $cur[$col] ?? null;
+      }
+      unset($b['advance'], $b['b2bCommission']);
+    }
     // Bookings made before a room-list change keep their old room name until it is changed here
     if ($f['villa'] !== $cur['villa']) assert_room_names($f['villa']);
     if ($cur['status'] === 'checked in' && $f['check_in'] !== $cur['check_in']) fail("The guest has checked in, so the check-in date can't change.");
@@ -469,11 +490,21 @@ try {
     require_right($me, 'edit_bookings');
     $cur = booking_row($seg[1]);
     if ($cur['status'] !== 'checked in') fail('Additional expenses can be added after guest check-in.');
-    $c = $chargeInput(body());
+    $b = body();
+    // One item, or several at once ({items: [...]}, e.g. a food order), saved together
+    $list = array_key_exists('items', $b) ? (is_array($b['items']) ? array_values($b['items']) : []) : [$b];
+    if (!$list) fail('Add at least one item.');
+    if (count($list) > 50) fail('Add up to 50 items at a time.');
+    $items = array_map(fn($x) => $chargeInput(is_array($x) ? $x : []), $list);
     $t = now_dt();
-    db()->prepare('INSERT INTO booking_charges (id, booking_ref, category, item, qty, rate, total, at) VALUES (?,?,?,?,?,?,?,?)')
-        ->execute([gen_id('c'), $cur['ref'], $c['category'], $c['item'], $c['qty'], $c['rate'], $c['total'], $t]);
-    add_event($cur['ref'], charge_event_text($c['category'], $c['item'], $c['qty'], $c['rate'], $c['total']), $t);
+    $pdo = db();
+    $pdo->beginTransaction();
+    $ins = $pdo->prepare('INSERT INTO booking_charges (id, booking_ref, category, item, qty, rate, total, at) VALUES (?,?,?,?,?,?,?,?)');
+    foreach ($items as $c) {
+      $ins->execute([gen_id('c'), $cur['ref'], $c['category'], $c['item'], $c['qty'], $c['rate'], $c['total'], $t]);
+      add_event($cur['ref'], charge_event_text($c['category'], $c['item'], $c['qty'], $c['rate'], $c['total']), $t);
+    }
+    $pdo->commit();
     json_out(['booking' => get_booking($cur['ref'])], 201);
   }
 
@@ -895,6 +926,10 @@ try {
       if (array_key_exists($key, $b) && !is_bool($b[$key])) fail('Invalid invoice option.');
       $show[$col] = array_key_exists($key, $b) ? (int)$b[$key] : (int)($cur[$col] ?? 0);
     }
+    if (array_key_exists('cancellationPolicy', $b)) {
+      $policy = mb_substr(trim((string)$b['cancellationPolicy']), 0, 3000);
+      db()->prepare('UPDATE invoice_settings SET cancellation_policy = ? WHERE id = 1')->execute([$policy]);
+    }
     if ($withShow) {
       db()->prepare('UPDATE invoice_settings SET prefix=?, next=?, padding=?, terms=?, show_payments=?, show_b2b=? WHERE id=1')
           ->execute([$prefix, $next, $padding, $terms, $show['show_payments'], $show['show_b2b']]);
@@ -990,6 +1025,7 @@ try {
     require_right($me, 'manage_ratings');
     $b = body();
     $f = $ratingInput($b);
+    if ($f['booking_ref']) assert_no_rating($f['booking_ref']);
     $id = gen_id('g');
     $resp = mb_substr(trim((string)($b['response'] ?? '')), 0, 3000) ?: null;
     db()->prepare('INSERT INTO ratings (id, booking_ref, guest, overall, aspects, comment, source, date, created_at, response, responded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
@@ -1005,11 +1041,19 @@ try {
     $cur = $st->fetch() ?: fail('Rating not found.', 404);
     if ($method === 'DELETE') {
       db()->prepare('DELETE FROM ratings WHERE id = ?')->execute([$cur['id']]);
-      json_out(['ok' => true]);
+      $ref = $cur['booking_ref'] ?? null;
+      if ($ref) {
+        $who = trim((string)($me['name'] ?? ''));
+        add_event($ref, "Guest rating deleted: {$cur['overall']}★ ({$cur['source']})" . ($who !== '' ? " by $who" : ''));
+      }
+      $still = $ref ? db()->prepare('SELECT 1 FROM bookings WHERE ref = ?') : null;
+      if ($still) $still->execute([$ref]);
+      json_out(['ok' => true, 'booking' => $still && $still->fetch() ? get_booking($ref) : null]);
     }
     $b = body();
     // A guest's own feedback can be replied to, but its scores and words stay as the guest gave them
     $f = $cur['source'] === 'Guest feedback link' ? null : $ratingInput($b, $cur);
+    if ($f && $f['booking_ref'] && $f['booking_ref'] !== ($cur['booking_ref'] ?? null)) assert_no_rating($f['booking_ref']);
     if ($f) {
       db()->prepare('UPDATE ratings SET booking_ref = ?, guest = ?, overall = ?, aspects = ?, comment = ?, source = ?, date = ? WHERE id = ?')
           ->execute([$f['booking_ref'], $f['guest'], $f['overall'], $f['aspects'], $f['comment'], $f['source'], $f['date'], $cur['id']]);

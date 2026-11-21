@@ -29,7 +29,7 @@ export function NewBooking() {
         onSubmit={async (input) => {
           const ref = await createBooking(input)
           toast.show('Booking created successfully!', `${input.guest} · ${ref} · ${input.villa} · ${fmtStay(input)}`)
-          navigate(`/bookings/${encodeURIComponent(ref)}`)
+          navigate('/bookings') // back to the booking list
         }}
       />
     </>

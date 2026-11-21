@@ -75,6 +75,7 @@ function fail(string $message, int $code = 400): void {
 function public_invoice(array $inv): array {
   return [
     'prefix' => $inv['prefix'], 'next' => (int)$inv['next'], 'padding' => (int)$inv['padding'], 'terms' => $inv['terms'],
+    'cancellationPolicy' => (string)($inv['cancellation_policy'] ?? ''),
     'showPayments' => (int)($inv['show_payments'] ?? 0) === 1,
     'showB2b'      => (int)($inv['show_b2b'] ?? 0) === 1,
   ];
@@ -304,6 +305,8 @@ function booking_shape(array $b, array $payments, array $charges = [], array $ev
     'completedAt'        => $b['completed_at'] ?? '',
     'cancelledAt'        => $b['cancelled_at'] ?? '',
     'cancellationCharge' => $int($b['cancellation_charge'] ?? null) ?? 0,
+    // nightly rate of each room when booked ({"Haven": 6500, …}); splits a group booking's revenue by room
+    'roomRates'          => (object)room_rates_of($b['room_rates'] ?? null),
     'charges' => array_map(fn($c) => [
       'id' => $c['id'], 'category' => $c['category'], 'item' => $c['item'], 'qty' => (int)$c['qty'],
       'rate' => (int)$c['rate'], 'total' => (int)$c['total'], 'at' => $c['at'], 'paymentId' => $c['payment_id'] ?? null,
@@ -358,7 +361,7 @@ function bootstrap_payload(): array {
   $inv = $pdo->query('SELECT * FROM invoice_settings WHERE id = 1')->fetch();
   $invoice = $inv
     ? public_invoice($inv)
-    : ['prefix' => 'KV-', 'next' => 1, 'padding' => 5, 'terms' => '', 'showPayments' => false, 'showB2b' => false];
+    : ['prefix' => 'KV-', 'next' => 1, 'padding' => 5, 'terms' => '', 'cancellationPolicy' => DEFAULT_CANCELLATION_POLICY, 'showPayments' => false, 'showB2b' => false];
 
   $overrides = [];
   foreach ($pdo->query('SELECT * FROM room_overrides')->fetchAll() as $o) {
@@ -384,7 +387,7 @@ function bootstrap_payload(): array {
 // ==================================================================
 
 /** Bump when ensure_schema() gains steps. */
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 function column_exists(string $table, string $col): bool {
   $st = db()->prepare('SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?');
@@ -578,8 +581,29 @@ function ensure_schema(bool $force = false): void {
     $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('rights_v3', '1')")->execute();
   }
 
+  // v6: per-room rates on group bookings; cancellation policy printed on the advance bill
+  add_column('bookings', 'room_rates', 'TEXT NULL');
+  add_column('invoice_settings', 'cancellation_policy', 'TEXT NULL');
+  $pdo->prepare('UPDATE invoice_settings SET cancellation_policy = ? WHERE cancellation_policy IS NULL')->execute([DEFAULT_CANCELLATION_POLICY]);
+
   $pdo->prepare("INSERT INTO app_settings (k, v) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)")
       ->execute([(string)SCHEMA_VERSION]);
+}
+
+/** Printed on the advance bill until it is changed in Configuration → Invoice. */
+const DEFAULT_CANCELLATION_POLICY = "Cancellation 15 days or more before check-in: the advance is refunded in full.\n"
+  . "Cancellation 7 to 14 days before check-in: 50% of the advance is refunded.\n"
+  . "Cancellation less than 7 days before check-in, or no-show: the advance is not refundable.\n"
+  . "Date changes are subject to room availability.\n"
+  . "Refunds are made to the original payment method within 7 working days.";
+
+/** room_rates column (JSON) → [room => nightly rate]; only whole, non-negative rates. */
+function room_rates_of(?string $json): array {
+  $out = [];
+  foreach ((json_decode((string)$json, true) ?: []) as $room => $rate) {
+    if (is_string($room) && $room !== '' && is_numeric($rate) && $rate >= 0) $out[$room] = (int)round((float)$rate);
+  }
+  return $out;
 }
 
 /** Gives every payment of a booking without a receipt number the next one (<ref>-R<n>), in ledger order. */
@@ -967,6 +991,13 @@ function clean_aspects($a): array {
     if (isset($a[$k]) && $a[$k] !== null && $a[$k] !== '' && $a[$k] !== 0) $out[$k] = stars($a[$k], $k);
   }
   return $out;
+}
+
+/** One rating per stay: a second one for the same booking is refused. */
+function assert_no_rating(string $ref): void {
+  $st = db()->prepare('SELECT 1 FROM ratings WHERE booking_ref = ? LIMIT 1');
+  $st->execute([$ref]);
+  if ($st->fetch()) fail('This stay already has a rating. Delete it first to record a different one.', 409);
 }
 
 function get_rating(string $id): array {

@@ -198,7 +198,7 @@ export const api = {
 
   createBooking: (input: BookingWrite) =>
     req<{ ref: string; booking: Booking }>('/bookings', { method: 'POST', body: input }),
-  updateBooking: (ref: string, fields: BookingWrite) =>
+  updateBooking: (ref: string, fields: Partial<BookingWrite>) =>
     req<{ booking: Booking }>(`/bookings/${encodeURIComponent(ref)}`, { method: 'PUT', body: fields }),
   deleteBooking: (ref: string) =>
     req<{ ok: boolean }>(`/bookings/${encodeURIComponent(ref)}`, { method: 'DELETE' }),
@@ -247,6 +247,9 @@ export const api = {
   // ---- Additional expenses (In-house) ----
   addCharge: (ref: string, c: ChargeWrite) =>
     req<{ booking: Booking }>(`/bookings/${enc(ref)}/charges`, { method: 'POST', body: c }),
+  /** Several items at once (e.g. a food order), saved together. */
+  addCharges: (ref: string, items: ChargeWrite[]) =>
+    req<{ booking: Booking }>(`/bookings/${enc(ref)}/charges`, { method: 'POST', body: { items } }),
   updateCharge: (id: string, c: ChargeWrite) =>
     req<{ booking: Booking }>(`/charges/${enc(id)}`, { method: 'PUT', body: c }),
   deleteCharge: (id: string) =>
@@ -288,7 +291,7 @@ export const api = {
   updateRating: (id: string, r: Partial<RatingWrite>) =>
     req<{ rating: Rating }>(`/ratings/${enc(id)}`, { method: 'PUT', body: r }),
   deleteRating: (id: string) =>
-    req<{ ok: boolean }>(`/ratings/${enc(id)}`, { method: 'DELETE' }),
+    req<{ ok: boolean; booking?: Booking | null }>(`/ratings/${enc(id)}`, { method: 'DELETE' }),
   /** Creates (once) the booking's guest feedback link token; the link is <site>/feedback?t=<token>. */
   feedbackLink: (ref: string) =>
     req<{ token: string; booking: Booking }>(`/bookings/${enc(ref)}/feedback-link`, { method: 'POST', body: {} }),

@@ -1,17 +1,15 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Download } from 'lucide-react'
 import { api, openFile } from '../../lib/api'
 import {
-  CHECK_IN_TIME, CHECK_OUT_TIME, chargesDue, chargesTotal, fmtDateTime, fmtDateTimeShort, isCancelled, isCompleted,
-  isInHouse, nightsOf, paymentType, roomLabel, sourceType,
+  CHECK_IN_TIME, CHECK_OUT_TIME, chargesDue, chargesTotal, fmtDateTime, fmtDateTimeShort, isCompleted,
+  isInHouse, nightsOf, paymentType, roomLabel, roomShares, sourceType,
 } from '../../lib/booking'
 import { fmtDate, fmtDateShort, formatINR } from '../../lib/format'
-import { can, useAuth } from '../../auth/AuthContext'
 import { useStore } from '../../data/store'
 import { PaymentTypeTag, Pill } from '../ui/Pill'
 import { linkCls, refCardCls, solidBtnCls } from '../styles'
-import { chargesInOrder, commissionInfo, datePart, receiptsOf, tdCls, thCls, timePart } from './helpers'
+import { chargesInOrder, datePart, receiptsOf, tdCls, thCls, timePart } from './helpers'
 import { Dash, DetailCard, Info } from './parts'
 import type { Booking, BookingCharge } from '../../types'
 
@@ -77,19 +75,17 @@ export function CancelledBanner({ booking: b }: { booking: Booking }) {
 
 function DocumentLinks({ booking: b }: { booking: Booking }) {
   const [error, setError] = useState('')
-  const open = (download: boolean) => {
+  // View only: the ID proof opens in a new tab (no download button on the booking page)
+  const view = () => {
     setError('')
-    openFile(api.documentPath(b.ref), download ? b.documentName : undefined)
+    openFile(api.documentPath(b.ref))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not open the document.'))
   }
   return (
     <>
       <div className="break-all text-sm font-medium text-dark">{b.documentName}</div>
-      <div className="mt-1 flex items-center gap-3 text-sm">
-        <button type="button" onClick={() => open(false)} className={linkCls}>View</button>
-        <button type="button" onClick={() => open(true)} className="inline-flex items-center gap-1 text-slate-600 hover:text-dark" aria-label={`Download ${b.documentName}`}>
-          <Download size={14} /> Download
-        </button>
+      <div className="mt-1 text-sm">
+        <button type="button" onClick={view} className={linkCls} aria-label={`View ${b.documentName}`}>View</button>
       </div>
       {error && <p role="alert" className="mt-1 text-xs text-red-700">{error}</p>}
     </>
@@ -117,38 +113,12 @@ export function GuestInfoCard({ booking: b }: { booking: Booking }) {
 // ---- Stay details ------------------------------------------------------
 
 function SourceInfo({ booking: b }: { booking: Booking }) {
-  const { data } = useStore()
-  const { user } = useAuth()
   const type = sourceType(b)
   const detail = (b.sourceDetail || '').trim()
   if (type === 'Direct') return <Info label="Booking source" sub="Direct booking" className="col-span-2">Direct</Info>
   if (type === 'OTA') return <Info label="Booking source" sub={detail || '—'} className="col-span-2">OTA</Info>
-  if (type === 'B2B') {
-    const c = commissionInfo(data, b)
-    const canPay = !!c && c.amount > c.paid && !isCancelled(b) && can(user, 'edit_expenses')
-    return (
-      <Info
-        label="Booking source"
-        className="col-span-2"
-        sub={
-          <>
-            <span className="block">{detail || '—'}</span>
-            {c && (
-              <span className="mt-1 flex flex-wrap items-center gap-2">
-                <span>Commission <span className="nums font-medium text-dark">{formatINR(c.amount)}</span></span>
-                <Pill tone={c.state === 'Paid' ? 'green' : 'amber'}>{c.state}</Pill>
-                {canPay && (
-                  <Link to={`/expenses?add=b2b&ref=${enc(b.ref)}`} className={linkCls}>Pay commission</Link>
-                )}
-              </span>
-            )}
-          </>
-        }
-      >
-        B2B
-      </Info>
-    )
-  }
+  // The agent's commission isn't shown here: it is recorded automatically under Expenses (pending until paid)
+  if (type === 'B2B') return <Info label="Booking source" sub={detail || '—'} className="col-span-2">B2B</Info>
   if (type === 'Referral') {
     return (
       <Info
@@ -191,7 +161,55 @@ export function StayDetailsCard({ booking: b }: { booking: Booking }) {
         <Info label="Kids"><span className="nums">{b.kids ?? 0}</span></Info>
         <SourceInfo booking={b} />
       </div>
+      <RoomWiseTable booking={b} />
     </DetailCard>
+  )
+}
+
+/** Group booking: one line per room with its share of the room amount (payments stay on the one booking). */
+function RoomWiseTable({ booking: b }: { booking: Booking }) {
+  const { data } = useStore()
+  const shares = roomShares(b, data)
+  if (shares.length < 2) return null
+  const nights = nightsOf(b)
+  return (
+    <div className="mt-6 border-t border-[#efece4] pt-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Rooms in this booking · {shares.length}</div>
+        <div className="text-[13px] text-slate-500">One bill and one payment ledger for the group</div>
+      </div>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full min-w-[420px] border-collapse text-[15px]">
+          <thead>
+            <tr className="text-left text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">
+              <th className="py-2 pr-3 font-semibold">Room</th>
+              <th className="py-2 pr-3 text-right font-semibold">Rate / night</th>
+              <th className="py-2 pr-3 text-right font-semibold">Nights</th>
+              <th className="py-2 text-right font-semibold">Room amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shares.map((s) => (
+              <tr key={s.room} className="border-t border-[#efece4]">
+                <td className="py-2.5 pr-3 font-medium text-dark">{s.room}</td>
+                <td className="nums py-2.5 pr-3 text-right text-slate-600">{s.rate > 0 ? formatINR(s.rate) : '—'}</td>
+                <td className="nums py-2.5 pr-3 text-right text-slate-600">{nights}</td>
+                <td className="nums py-2.5 text-right font-semibold text-dark">{formatINR(s.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-[#e6e1d6]">
+              <td colSpan={3} className="py-2.5 pr-3 text-right font-semibold text-dark">Booking total</td>
+              <td className="nums py-2.5 text-right font-semibold text-dark">{formatINR(b.total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {b.originalTotal !== undefined && b.originalTotal !== b.total && (
+        <p className="mt-2 text-[13px] text-slate-500">The booking total differs from the room rates, so each room’s amount is its share of the total by rate.</p>
+      )}
+    </div>
   )
 }
 
@@ -308,7 +326,7 @@ export function LedgerCard({ booking: b, showDownloadAll, showDue }: { booking: 
     <DetailCard
       flush
       title="Bills & payment ledger"
-      action={showDownloadAll ? <Link to={billsTo} className={`${linkCls} text-sm`}>Download all bills</Link> : undefined}
+      action={showDownloadAll ? <Link to={billsTo} className={`${linkCls} text-sm`}>Download One Bill</Link> : undefined}
     >
       <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] border-collapse">

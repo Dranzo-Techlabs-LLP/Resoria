@@ -1,6 +1,6 @@
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { useStore } from '../data/store'
-import { isCancelled, isCompleted, statusLabel } from '../lib/booking'
+import { isCancelled, isCompleted, isInHouse, statusLabel } from '../lib/booking'
 import { PageTitle } from '../components/ui/PageTitle'
 import { StatusTag } from '../components/ui/Pill'
 import { useToast } from '../components/ui/Toast'
@@ -30,18 +30,23 @@ export function EditBooking() {
     <>
       <PageTitle
         back={{ to: detailsTo, label: 'Back to booking' }}
-        title="Edit booking"
+        title={isInHouse(booking) ? 'Edit guest details' : 'Edit booking'}
         subtitle={`${booking.guest} · ${booking.ref}`}
         tag={<StatusTag label={statusLabel(booking)} />}
       />
       <BookingForm
         key={booking.ref}
         booking={booking}
-        submitLabel="Save changes"
+        submitLabel={isInHouse(booking) ? 'Save guest details' : 'Save changes'}
         busyLabel="Saving…"
         onSubmit={async (input) => {
           await updateBooking(booking.ref, input)
           toast.show('Booking updated', `${input.guest} · ${booking.ref}`)
+          navigate(detailsTo)
+        }}
+        onSubmitGuest={async (input) => {
+          await updateBooking(booking.ref, input)
+          toast.show('Guest details updated', `${input.guest} · ${booking.ref}`)
           navigate(detailsTo)
         }}
       />

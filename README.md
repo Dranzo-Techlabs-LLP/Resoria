@@ -85,7 +85,7 @@ WHM terminal.
 
 - Contact details for the website and invoices: `source/website/src/lib/content.ts`
   and `source/src/lib/config.ts` (items marked `PLACEHOLDER` or `TODO`).
-- Invoice terms: in the admin under **Configuration → Invoice**.
+- Invoice terms and the cancellation policy (printed on the advance bill): in the admin under **Configuration → Invoice**.
 - Enquiry email: `ENQUIRY_TO_EMAIL` in the server's `api/config.php`.
 
 ## Before going live: Configuration

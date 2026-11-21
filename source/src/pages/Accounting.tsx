@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { B2B_CATEGORY, useStore } from '../data/store'
 import { FULL_PROPERTY, isFullProperty, primaryRoom, ROOM_NAMES, ROOM_OPTIONS } from '../lib/config'
+import { amountForRoom, bookingUnits } from '../lib/managementReport'
+import type { Booking, Expense } from '../types'
 import { formatINR, TODAY, TODAY_ISO, toISO } from '../lib/format'
 import { inputCls, refCardCls, selectCls, thCls, thRightCls } from '../components/styles'
 import { PageTitle } from '../components/ui/PageTitle'
@@ -39,54 +41,111 @@ export function Accounting() {
     }
     const hasFull = data.bookings.some((b) => isFullProperty(b.villa)) || data.expenses.some((e) => isFullProperty(e.villa))
     const villaList = villa === 'All rooms' ? (hasFull ? [...ROOM_NAMES, FULL_PROPERTY] : ROOM_NAMES) : [villa]
-    const inScope = (v: string) => villa === 'All rooms' || v === villa
 
-    const perVilla = villaList.map((v) => {
-      const bk = data.bookings.filter((b) => primaryRoom(b.villa) === v)
-      // All money received counts as revenue: room payments and additional-expense collections (purpose 'extras')
-      const paid = (b: (typeof bk)[number], extras: boolean) =>
-        b.payments.filter((p) => p.kind === 'payment' && (p.purpose === 'extras') === extras && payOk(b, p.date)).reduce((ps, p) => ps + p.amount, 0)
-      const roomCollected = bk.reduce((s, b) => s + paid(b, false), 0)
-      const extrasCollected = bk.reduce((s, b) => s + paid(b, true), 0)
+    const byRef = new Map(data.bookings.map((b) => [b.ref.toLowerCase(), b]))
+    const unitsCache = new Map<Booking, ReturnType<typeof bookingUnits>>()
+    const units = (b: Booking) => {
+      let u = unitsCache.get(b)
+      if (!u) { u = bookingUnits(b, data); unitsCache.set(b, u) }
+      return u
+    }
+    const linked = (e: Expense) => (e.bookingRef ? byRef.get(e.bookingRef.trim().toLowerCase()) : undefined)
+
+    /**
+     * Money of the bookings and expenses that `part` gives a share of: part(b, amount) is the booking's amount that
+     * counts here (all of it, a room's share, or 0 = not counted); `expenseOk` picks the expenses by their room.
+     */
+    const figures = (part: (b: Booking, amount: number) => number, inScopeB: (b: Booking) => boolean, b2bPart: (e: Expense) => number, expenseOk: (e: Expense) => boolean) => {
+      let roomCollected = 0
+      let extrasCollected = 0
+      let refunded = 0
+      let contracted = 0
+      let bookings = 0
+      for (const b of data.bookings) {
+        if (!inScopeB(b)) continue
+        // All money received counts as revenue: room payments and additional-expense collections (purpose 'extras')
+        let room = 0
+        let extras = 0
+        let back = 0
+        for (const p of b.payments) {
+          if (!payOk(b, p.date)) continue
+          if (p.kind === 'refund') back += p.amount
+          else if (p.kind === 'payment') {
+            if (p.purpose === 'extras') extras += p.amount
+            else room += p.amount
+          }
+        }
+        roomCollected += part(b, room)
+        extrasCollected += part(b, extras)
+        refunded += part(b, back)
+        if (b.status !== 'cancelled' && inRange(b.checkIn)) {
+          contracted += part(b, b.total)
+          bookings += 1
+        }
+      }
+      let b2b = 0 // paid out by the resort
+      let b2bExt = 0 // collected by the partner
+      let operating = 0
+      for (const e of data.expenses) {
+        if (e.category === B2B_CATEGORY) {
+          if (!b2bOk(e)) continue
+          const amt = b2bPart(e)
+          if (e.external) b2bExt += amt
+          else b2b += amt
+        } else if (expenseOk(e) && inRange(e.date)) operating += e.amount
+      }
       const collected = roomCollected + extrasCollected
-      const refunded = bk.reduce((s, b) => s + b.payments.filter((p) => p.kind === 'refund' && payOk(b, p.date)).reduce((ps, p) => ps + p.amount, 0), 0)
-      const b2bRows = data.expenses.filter((e) => primaryRoom(e.villa) === v && e.category === B2B_CATEGORY && b2bOk(e))
-      const b2b = b2bRows.filter((e) => !e.external).reduce((s, e) => s + e.amount, 0) // paid out by the resort
-      const b2bExt = b2bRows.filter((e) => e.external).reduce((s, e) => s + e.amount, 0) // collected by the partner
-      const operating = data.expenses.filter((e) => primaryRoom(e.villa) === v && e.category !== B2B_CATEGORY && inRange(e.date)).reduce((s, e) => s + e.amount, 0)
-      const bookings = bk.filter((b) => b.status !== 'cancelled' && inRange(b.checkIn)).length
       const revenue = collected - refunded - b2b
-      return { villa: v, collected, roomCollected, extrasCollected, refunded, b2b, b2bExt, operating, bookings, revenue, profit: revenue - operating }
-    })
+      return { collected, roomCollected, extrasCollected, refunded, b2b, b2bExt, operating, bookings, contracted, revenue, profit: revenue - operating }
+    }
+
+    // Per room: a group booking counts in each of its rooms with that room's share of its money (by the nightly
+    // rates when booked); a whole-property booking counts under Full Property
+    const perVilla = villaList.map((v) => ({
+      villa: v,
+      ...figures(
+        (b, amount) => amountForRoom(amount, units(b), v),
+        (b) => units(b).some((u) => u.room === v),
+        (e) => { const bk = linked(e); return bk ? amountForRoom(e.amount, units(bk), v) : primaryRoom(e.villa) === v ? e.amount : 0 },
+        (e) => primaryRoom(e.villa) === v,
+      ),
+    }))
+
     // Expenses with no room (stock purchases, repairs, salaries…) belong to the whole resort: under
     // All rooms they get a row of their own, so the totals and the profit include them.
+    const listed = new Set(villaList)
     if (villa === 'All rooms') {
-      const listed = new Set(villaList)
       const general = data.expenses
         .filter((e) => !listed.has(primaryRoom(e.villa)) && e.category !== B2B_CATEGORY && inRange(e.date))
         .reduce((s, e) => s + e.amount, 0)
       if (general > 0) {
-        perVilla.push({ villa: GENERAL_ROW, collected: 0, roomCollected: 0, extrasCollected: 0, refunded: 0, b2b: 0, b2bExt: 0, operating: general, bookings: 0, revenue: 0, profit: -general })
+        perVilla.push({ villa: GENERAL_ROW, collected: 0, roomCollected: 0, extrasCollected: 0, refunded: 0, b2b: 0, b2bExt: 0, operating: general, bookings: 0, contracted: 0, revenue: 0, profit: -general })
       }
     }
 
-    const sum = (f: (r: (typeof perVilla)[number]) => number) => perVilla.reduce((s, r) => s + f(r), 0)
-    const collected = sum((r) => r.collected)
-    const roomCollected = sum((r) => r.roomCollected)
-    const extrasCollected = sum((r) => r.extrasCollected)
-    const refunded = sum((r) => r.refunded)
-    const b2b = sum((r) => r.b2b)
-    const b2bExt = sum((r) => r.b2bExt)
-    const operating = sum((r) => r.operating)
+    // Totals: All rooms counts every booking and expense once, in full (as before the split, general expenses
+    // included); one room is its row
+    const all = villa === 'All rooms'
+      ? figures(
+        (_b, amount) => amount,
+        (b) => listed.has(primaryRoom(b.villa)),
+        (e) => (listed.has(primaryRoom(e.villa)) ? e.amount : 0),
+        () => true,
+      )
+      : perVilla[0]
+    const { collected, extrasCollected, refunded, b2b, b2bExt, operating } = all
+    // Contracted value for All rooms is every booking checking in (rooms from the older list included)
+    const contracted = villa === 'All rooms'
+      ? data.bookings.filter((b) => b.status !== 'cancelled' && inRange(b.checkIn)).reduce((s, b) => s + b.total, 0)
+      : all.contracted
     // Total revenue always includes the B2B amount: what was collected plus what the partner collected externally.
     // Net revenue takes all the B2B off; money the partner kept was never collected, so it isn't taken off twice.
     const totalRevenue = collected - refunded + b2bExt
     const netRevenue = collected - refunded - b2b
     const profit = netRevenue - operating
-    const contracted = data.bookings.filter((b) => inScope(primaryRoom(b.villa)) && b.status !== 'cancelled' && inRange(b.checkIn)).reduce((s, b) => s + b.total, 0)
     // What guests still owe for their rooms (refunds are room money; B2B collected externally is settled).
     // Additional-expense collections pay for extras, not the room, so they don't reduce it.
-    const outstanding = contracted - (roomCollected - refunded) - b2bExt
+    const outstanding = contracted - (all.roomCollected - refunded) - b2bExt
     return { perVilla, collected, extrasCollected, refunded, b2b, b2bExt, operating, totalRevenue, netRevenue, profit, contracted, outstanding }
   }, [data, villa, from, to, basis])
 

@@ -4,7 +4,7 @@ import { ChoiceChips } from '../ui/Chips'
 import { useToast } from '../ui/Toast'
 import { useStore } from '../../data/store'
 import { formatINR } from '../../lib/format'
-import { PAY_METHODS, chargesDue, refundInfo, roomBalance, roomPaid, unpaidCharges } from '../../lib/booking'
+import { PAY_METHODS, chargesDue, refundInfo, roomBalance, unpaidCharges } from '../../lib/booking'
 import { capsLabelCls, fieldCls, labelCls } from '../styles'
 import { advanceReceived, amountOf, chargesInOrder, todayISO } from './helpers'
 import { FormError, MoneyInput, PopupActions, SandBox } from './parts'
@@ -41,30 +41,28 @@ function ReferenceField({ id, value, onChange, disabled }: { id: string; value: 
   )
 }
 
-/** Collect the room balance (in full or in part). */
+/**
+ * Collect the remaining room balance. No amount, date or reference to fill in: the full remaining balance is
+ * received today; staff only choose how it was paid.
+ */
 export function CollectRemainingModal({ booking, onClose }: { booking: Booking; onClose: () => void }) {
   const { recordPayment } = useStore()
   const toast = useToast()
   const balance = roomBalance(booking)
-  const paid = roomPaid(booking)
-  const [amount, setAmount] = useState(String(balance))
-  const [date, setDate] = useState(todayISO())
+  const advance = advanceReceived(booking)
+  const received = booking.total - balance // advance + earlier payments (+ partner-collected)
   const [method, setMethod] = useState<Method | ''>('')
-  const [reference, setReference] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const value = amountOf(amount)
 
   async function submit() {
-    if (value < 1) { setError('Enter the amount received.'); return }
-    if (value > balance) { setError(`The amount can't be more than the ${formatINR(balance)} balance.`); return }
-    if (!date) { setError('Choose the payment date.'); return }
+    if (balance < 1) { setError('There is no remaining balance to collect.'); return }
     if (!method) { setError('Choose the payment method.'); return }
     setBusy(true)
     setError('')
     try {
-      await recordPayment(booking.ref, { date, amount: value, kind: 'payment', method, reference: reference.trim(), purpose: 'room' })
-      toast.show('Payment recorded', `${formatINR(value)} (${method}) · ${subtitleOf(booking)}`)
+      await recordPayment(booking.ref, { date: todayISO(), amount: balance, kind: 'payment', method, reference: '', purpose: 'room' })
+      toast.show('Payment recorded', `${formatINR(balance)} (${method}) · ${subtitleOf(booking)}`)
       onClose()
     } catch (e) {
       setError(errText(e, 'Could not record the payment.'))
@@ -72,27 +70,28 @@ export function CollectRemainingModal({ booking, onClose }: { booking: Booking; 
     }
   }
 
+  const line = (label: string, v: string) => (
+    <div className="flex justify-between gap-4 text-[15px]">
+      <span className="text-slate-600">{label}</span>
+      <span className="nums font-semibold text-dark">{v}</span>
+    </div>
+  )
+
   return (
     <Modal title="Collect remaining payment" subtitle={subtitleOf(booking)} onClose={() => { if (!busy) onClose() }}>
       <div className="space-y-4">
         <SandBox>
           <div className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Remaining balance</div>
           <div className="nums mt-1 font-display text-[40px] font-semibold leading-tight text-dark">{formatINR(balance)}</div>
-          <div className="nums text-sm text-slate-600">
-            {formatINR(booking.total)} total − {formatINR(booking.total - balance)} {paid > 0 && paid === advanceReceived(booking) ? 'advance' : 'received'}
+          <div className="mt-3 space-y-2 border-t border-[#e0dbcf] pt-3">
+            {line('Total amount', formatINR(booking.total))}
+            {advance > 0 && line('Advance paid', formatINR(advance))}
+            {received - advance > 0 && line('Other payments received', formatINR(received - advance))}
           </div>
         </SandBox>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className={labelCls} htmlFor="collect-amount">Amount</label>
-            <MoneyInput id="collect-amount" value={amount} onChange={setAmount} disabled={busy} />
-          </div>
-          <DateField id="collect-date" label="Payment date" value={date} onChange={setDate} disabled={busy} />
-        </div>
         <MethodField label="Payment method" value={method} onChange={setMethod} disabled={busy} />
-        <ReferenceField id="collect-ref" value={reference} onChange={setReference} disabled={busy} />
         <FormError>{error}</FormError>
-        <PopupActions onCancel={onClose} onSubmit={submit} label="Submit" busyLabel="Saving…" busy={busy} />
+        <PopupActions onCancel={onClose} onSubmit={submit} label={`Collect ${formatINR(balance)}`} busyLabel="Saving…" busy={busy} disabled={balance < 1} />
       </div>
     </Modal>
   )

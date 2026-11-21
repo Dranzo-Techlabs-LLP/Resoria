@@ -13,14 +13,13 @@ const enc = encodeURIComponent
 
 /** One review: stars, date, source, linked booking, aspect scores, comment and the resort's reply. */
 export function RatingCard({
-  rating: r, showGuest = true, showBooking = true, canManage, onReply, onEdit, onDelete,
+  rating: r, showGuest = true, showBooking = true, canManage, onReply, onDelete,
 }: {
   rating: Rating
   showGuest?: boolean
   showBooking?: boolean
   canManage: boolean
   onReply: () => void
-  onEdit: () => void
   onDelete: () => void
 }) {
   const guestLink = isGuestSubmitted(r)
@@ -49,11 +48,7 @@ export function RatingCard({
         {canManage && (
           <KebabMenu
             label={`Actions for ${who}`}
-            items={[
-              { label: reply ? 'Edit reply' : 'Reply', onClick: onReply },
-              { label: 'Edit', onClick: onEdit, hidden: guestLink },
-              { label: 'Delete', onClick: onDelete, danger: true },
-            ]}
+            items={[{ label: 'Delete', onClick: onDelete, danger: true }]}
           />
         )}
       </div>
@@ -72,7 +67,7 @@ export function RatingCard({
       {comment
         ? <p className="mt-3 whitespace-pre-line break-words text-[15px] leading-relaxed text-slate-700">“{comment}”</p>
         : <p className="mt-3 text-sm text-slate-400">No comment.</p>}
-      {guestLink && canManage && <p className="mt-2 text-[13px] text-slate-500">Submitted by the guest · scores and words can’t be edited.</p>}
+      {guestLink && canManage && <p className="mt-2 text-[13px] text-slate-500">Submitted by the guest through the feedback link.</p>}
 
       {reply ? (
         <div className="mt-4 rounded-xl border-l-[3px] border-ink bg-canvas px-4 py-3">
@@ -85,9 +80,12 @@ export function RatingCard({
           <p className="mt-1.5 whitespace-pre-line break-words text-[15px] text-slate-700">{reply}</p>
         </div>
       ) : canManage ? (
-        <button type="button" onClick={onReply} className={`${outlineBtnCls} mt-4 !h-10 !px-4 !text-sm`}>
-          <MessageSquareReply size={16} aria-hidden /> Reply
-        </button>
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <button type="button" onClick={onReply} className={`${outlineBtnCls} !h-10 !px-4 !text-sm`}>
+            <MessageSquareReply size={16} aria-hidden /> Reply
+          </button>
+          <span className="text-[13px] text-slate-500">Write the resort’s response: it’s saved with the review{r.bookingRef ? ' and can be sent to the guest on WhatsApp' : ''}.</span>
+        </div>
       ) : null}
     </article>
   )

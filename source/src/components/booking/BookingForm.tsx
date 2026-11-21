@@ -92,12 +92,16 @@ function initialState(data: AppData, booking?: Booking, room?: string, checkIn?:
   }
 }
 
+/** What an in-house booking may still change: the guest details only. */
+export type GuestDetailsWrite = Pick<BookingWrite, 'guest' | 'phone' | 'altPhone' | 'email' | 'place' | 'document'>
+const GUEST_KEYS: readonly FieldKey[] = ['guest', 'phone', 'place', 'document']
+
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 function joinList(items: string[]): string {
   return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
 
-export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel, busyLabel, onSubmit }: {
+export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel, busyLabel, onSubmit, onSubmitGuest }: {
   /** Edit mode when given. */
   booking?: Booking
   /** New booking prefill (?room=…&checkIn=…). */
@@ -107,11 +111,14 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
   busyLabel: string
   /** Saves the booking; throws with a readable message on failure. */
   onSubmit: (input: BookingWrite) => Promise<void>
+  /** In-house bookings: saves the guest details only (everything else is locked after check-in). */
+  onSubmitGuest?: (input: GuestDetailsWrite) => Promise<void>
 }) {
   const { user } = useAuth()
   const { data } = useStore()
   const isEdit = !!booking
   const inHouse = !!booking && isInHouse(booking)
+  const guestOnly = inHouse && !!onSubmitGuest // after check-in only the guest details can change
   const canEditAmount = can(user, 'edit_bookings')
 
   const [f, setF] = useState<FormState>(() => initialState(data, booking, initialRoom, initialCheckIn))
@@ -151,6 +158,11 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
     return m
   }, [data.bookings, booking?.ref, datesOk, f.checkIn, f.checkOut])
   const clashes = rooms.filter((r) => taken.has(r))
+  // "Book all rooms": every room that's free for the chosen dates
+  const freeRooms = ROOM_NAMES.filter((r) => !taken.has(r))
+  const allFreeChosen = freeRooms.length > 0 && freeRooms.every((r) => rooms.includes(r))
+  // Nightly rate of each room as booked (kept for rooms already on the booking): splits a group booking by room
+  const rateOf = (r: string) => booking?.roomRates?.[r] ?? effectiveRate(r, data)
 
   const capacity = rooms.reduce((s, r) => s + (data.villaOverrides[r]?.maxGuests ?? roomCapacity(r).max), 0)
   const overCapacity = rooms.length > 0 && adults + kids > capacity
@@ -190,6 +202,7 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
   if (totalStr !== '' && advance > total) errors.advance = 'The advance can’t be more than the total amount.'
   if (advance > 0 && !f.method) errors.method = 'Select the payment mode of the advance.'
 
+  if (guestOnly) for (const k of Object.keys(errors) as FieldKey[]) if (!GUEST_KEYS.includes(k)) delete errors[k]
   const errorKeys = Object.keys(errors) as FieldKey[]
   const valid = errorKeys.length === 0
   const shown = (k: FieldKey) => ((submitted || touched.has(k)) ? errors[k] : undefined)
@@ -236,6 +249,20 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
     if (!valid || busy) return
     setBusy(true)
     setServerError('')
+    if (guestOnly && onSubmitGuest) {
+      const guestInput: GuestDetailsWrite = {
+        guest: f.guest.trim(), phone: f.phone.trim(), place: f.place.trim(),
+        altPhone: booking?.altPhone ?? '', email: booking?.email ?? '',
+      }
+      if (doc) guestInput.document = doc.upload
+      try {
+        await onSubmitGuest(guestInput)
+      } catch (err) {
+        setServerError(err instanceof Error ? err.message : 'Could not save the guest details.')
+        setBusy(false)
+      }
+      return
+    }
     const source = f.source as BookingSource
     const sourceDetail = source === 'B2B' ? f.agent : source === 'OTA' ? f.platform : source === 'Management Referral' ? f.referrer : ''
     const sameStay = !!booking && booking.villa === villa && booking.checkIn === f.checkIn && booking.checkOut === f.checkOut
@@ -258,6 +285,7 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
       source,
       sourceDetail,
       commission: source === 'B2B' ? commission : 0,
+      roomRates: Object.fromEntries(rooms.map((r) => [r, rateOf(r)])),
       advance,
       advanceMethod: advance > 0 ? f.method : undefined,
       notes: f.notes.trim(),
@@ -295,6 +323,12 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
         {serverError && (
           <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{serverError}</div>
         )}
+        {guestOnly && (
+          <div className="rounded-xl border border-[#e6e1d6] bg-sand px-4 py-3 text-sm leading-relaxed text-slate-700">
+            <span className="font-semibold text-dark">The guest is in-house.</span> Only the guest details can be edited now. Rooms, dates, source,
+            payment and notes are locked after check-in.
+          </div>
+        )}
 
         {/* A · Guest details */}
         <Section title="A · Guest details">
@@ -322,10 +356,25 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
           </div>
         </Section>
 
+        {/* B–E are locked once the guest is in-house */}
+        <fieldset disabled={guestOnly} className={`min-w-0 space-y-5 ${guestOnly ? 'opacity-60' : ''}`} aria-label={guestOnly ? 'Locked after check-in' : undefined}>
         {/* B · Stay details */}
         <Section title="B · Stay details">
           <div role="group" aria-labelledby="bk-rooms-label">
-            <span id="bk-rooms-label" className={capsLabelCls}>Rooms*</span>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <span id="bk-rooms-label" className={capsLabelCls}>Rooms*</span>
+              {!guestOnly && freeRooms.length > 1 && (
+                <button
+                  type="button"
+                  className="mb-2 text-sm font-medium text-dark underline underline-offset-2 hover:text-ink-hover"
+                  onClick={() => { set('rooms', allFreeChosen ? [] : freeRooms); touch('rooms') }}
+                >
+                  {allFreeChosen
+                    ? 'Clear all rooms'
+                    : freeRooms.length === ROOM_NAMES.length ? `Book all rooms (${freeRooms.length})` : `Book all available rooms (${freeRooms.length})`}
+                </button>
+              )}
+            </div>
             <MultiChips
               options={ROOM_NAMES}
               value={rooms}
@@ -382,9 +431,9 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
                 options={data.settings.agents} error={shown('agent')} emptyText="No agents yet." configTab="agents" configLabel="Add agents in Configuration"
                 onChange={(v) => { set('agent', v); touch('agent') }} />
               <InfoBox>
-                <span className="font-semibold text-dark">B2B commission:</span> calculated from the agent’s configuration and saved as a pending record
-                {' '}(<span className="nums font-medium text-dark">{f.agent ? formatINR(commission) : 'select an agent'}</span>).
-                {' '}Pay it later from Expenses → Add Expense → B2B Payment.
+                <span className="font-semibold text-dark">B2B commission:</span> calculated from the agent’s configuration
+                {' '}(<span className="nums font-medium text-dark">{f.agent ? formatINR(commission) : 'select an agent'}</span>) and recorded
+                {' '}automatically under Expenses as pending. Pay it from there when it’s due.
               </InfoBox>
             </div>
           )}
@@ -438,6 +487,7 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
           <textarea id="bk-notes" rows={3} className={fieldAreaCls} value={f.notes} placeholder="Anything to remember about this booking…"
             onChange={(e) => set('notes', e.target.value)} />
         </Section>
+        </fieldset>
       </div>
 
       {/* Booking summary (sticky on wide screens, below the form on phones) */}
@@ -445,7 +495,17 @@ export function BookingForm({ booking, initialRoom, initialCheckIn, submitLabel,
         <div className={`${refCardCls} p-5 sm:p-6`}>
           <div className={capsLabelCls}>Booking summary</div>
           <dl className="mt-3 space-y-3 text-[15px]">
-            <SummaryRow label="Room" value={roomText} />
+            <SummaryRow label={rooms.length > 1 ? `Rooms (${rooms.length})` : 'Room'} value={roomText} />
+            {rooms.length > 1 && datesOk && calculated > 0 && (
+              <ul className="space-y-1 rounded-xl bg-canvas px-3 py-2.5 text-[13px] text-slate-600" aria-label="Room-wise amount">
+                {rooms.map((r) => (
+                  <li key={r} className="flex justify-between gap-3">
+                    <span className="min-w-0 truncate">{r} <span className="nums text-slate-500">· {formatINR(rateOf(r))} × {nights}</span></span>
+                    <span className="nums shrink-0 font-medium text-dark">{formatINR(rateOf(r) * nights)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <SummaryRow label="Stay" value={stayText} />
             <SummaryRow label="Guests" value={guestText} />
           </dl>

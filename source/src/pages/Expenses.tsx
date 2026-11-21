@@ -102,6 +102,18 @@ export function Expenses() {
     [data.expenses, villa],
   )
   const total = rows.reduce((s, r) => s + r.amount, 0)
+  // B2B commission is recorded here automatically: each B2B booking's unpaid commission shows as a Pending line
+  // (booked on the booking date) until it is paid through B2B Payment
+  const pendingRows = useMemo(
+    () => pending.filter((p) => villa === ALL_ROOMS || bookingHasRoom(p.booking.villa, villa)),
+    [pending, villa],
+  )
+  const pendingShown = pendingRows.reduce((s, p) => s + p.pending, 0)
+  type Line = { kind: 'expense'; date: string; e: (typeof rows)[number] } | { kind: 'pending'; date: string; p: PendingCommission }
+  const lines: Line[] = useMemo(() => [
+    ...rows.map((e) => ({ kind: 'expense' as const, date: e.date, e })),
+    ...pendingRows.map((p) => ({ kind: 'pending' as const, date: p.booking.createdAt || p.booking.checkIn, p })),
+  ].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)), [rows, pendingRows])
 
   const isB2b = form.category === B2B_CATEGORY
   const linked = isB2b && !editId && form.bookingRef.trim()
@@ -178,7 +190,12 @@ export function Expenses() {
     <>
       <PageTitle
         title="Expenses"
-        subtitle={<>Total shown: <span className="nums font-semibold text-due">{formatINR(total)}</span></>}
+        subtitle={
+          <>
+            Total shown: <span className="nums font-semibold text-due">{formatINR(total)}</span>
+            {pendingShown > 0 && <> · B2B commission pending: <span className="nums font-semibold text-due">{formatINR(pendingShown)}</span></>}
+          </>
+        }
         actions={
           <>
             <select value={villa} onChange={(e) => setVilla(e.target.value)} aria-label="Filter by room"
@@ -219,7 +236,40 @@ export function Expenses() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#eee8dc]">
-              {rows.map((r) => (
+              {lines.map((line) => {
+                if (line.kind === 'pending') {
+                  const p = line.p
+                  return (
+                    <tr key={`pending-${p.booking.ref}`} className="bg-due-soft/40">
+                      <td className="nums py-3.5 pr-4 pl-5 whitespace-nowrap text-slate-600">{fmtDate(line.date)}</td>
+                      <td className="px-4 py-3.5">
+                        <span className="inline-flex flex-wrap gap-1.5">
+                          <span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-0.5 text-[13px] font-medium ${CATEGORY_PILL[B2B_CATEGORY] ?? 'bg-slate-100 text-slate-600'}`}>{B2B_CATEGORY}</span>
+                          <span className="inline-flex whitespace-nowrap rounded-full bg-amber-50 px-2.5 py-0.5 text-[13px] font-medium text-amber-700">Pending</span>
+                        </span>
+                      </td>
+                      <td className="px-4 py-3.5 text-slate-700">{p.booking.villa}</td>
+                      <td className="px-4 py-3.5"><Link to={`/bookings/${encodeURIComponent(p.booking.ref)}`} className="nums font-medium text-dark underline underline-offset-2 hover:text-ink-hover">{p.booking.ref}</Link></td>
+                      <td className="px-4 py-3.5 text-slate-700">
+                        B2B commission · {p.agent} · {p.booking.guest}
+                        <span className="nums block text-[13px] text-slate-500">
+                          Recorded automatically · commission {formatINR(p.commission)}{p.paid > 0 ? ` · paid ${formatINR(p.paid)}` : ''} · to pay {formatINR(p.pending)}
+                        </span>
+                      </td>
+                      <td className="nums px-4 py-3.5 text-right font-semibold whitespace-nowrap text-amber-700">{formatINR(p.pending)}</td>
+                      <td className="py-3.5 pr-5 pl-4 text-right">
+                        {canEdit && (
+                          <button type="button" onClick={() => startAdd(true, p.booking.ref)} className="whitespace-nowrap text-sm font-medium text-dark underline underline-offset-2 hover:text-ink-hover"
+                            aria-label={`Pay B2B commission for ${p.booking.ref}`}>
+                            Pay
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                }
+                const r = line.e
+                return (
                 <tr key={r.id}>
                   <td className="nums py-3.5 pr-4 pl-5 whitespace-nowrap text-slate-600">{fmtDate(r.date)}</td>
                   <td className="px-4 py-3.5"><span className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-0.5 text-[13px] font-medium ${CATEGORY_PILL[r.category] ?? 'bg-slate-100 text-slate-600'}`}>{r.category}</span></td>
@@ -249,8 +299,9 @@ export function Expenses() {
                     ))}
                   </td>
                 </tr>
-              ))}
-              {rows.length === 0 && <tr><td colSpan={7} className="px-5 py-12 text-center text-[15px] text-slate-500">No expenses for this filter.</td></tr>}
+                )
+              })}
+              {lines.length === 0 && <tr><td colSpan={7} className="px-5 py-12 text-center text-[15px] text-slate-500">No expenses for this filter.</td></tr>}
             </tbody>
           </table>
         </div>

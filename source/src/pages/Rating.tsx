@@ -33,7 +33,7 @@ const matchesStars = (r: RatingT, s: StarsFilter) => !s || (s === 'low' ? r.over
 
 type Popup =
   | { kind: 'add' }
-  | { kind: 'edit' | 'reply' | 'delete'; rating: RatingT }
+  | { kind: 'reply' | 'delete'; rating: RatingT }
 
 const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0)
 const reviews = (n: number) => `${n} ${n === 1 ? 'review' : 'reviews'}`
@@ -155,8 +155,9 @@ export function Rating() {
   const popups = (
     <>
       {popup?.kind === 'add' && <RatingFormModal onClose={close} />}
-      {popup?.kind === 'edit' && <RatingFormModal rating={popup.rating} onClose={close} />}
-      {popup?.kind === 'reply' && <ReplyModal rating={popup.rating} onClose={close} />}
+      {popup?.kind === 'reply' && (
+        <ReplyModal rating={popup.rating} phone={data.bookings.find((b) => b.ref === popup.rating.bookingRef)?.phone} onClose={close} />
+      )}
       {popup?.kind === 'delete' && (
         <ConfirmModal
           title="Delete rating?"
@@ -172,6 +173,7 @@ export function Rating() {
         >
           Delete <span className="font-semibold text-dark">{popup.rating.guest}</span>’s {popup.rating.overall}★ rating
           {popup.rating.response?.trim() ? ' and its reply' : ''}? This can’t be undone.
+          {popup.rating.bookingRef && ' The deletion is recorded in the booking’s stay history.'}
         </ConfirmModal>
       )}
     </>
@@ -333,7 +335,6 @@ export function Rating() {
                       rating={r}
                       canManage={canManage}
                       onReply={() => setPopup({ kind: 'reply', rating: r })}
-                      onEdit={() => setPopup({ kind: 'edit', rating: r })}
                       onDelete={() => setPopup({ kind: 'delete', rating: r })}
                     />
                   </li>

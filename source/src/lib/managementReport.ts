@@ -11,6 +11,7 @@
 import { B2B_CATEGORY, effectiveRate, paidOf } from '../data/store'
 import { ALL_ROOMS, bookingHasRoom, bookingRooms, FULL_PROPERTY, isFullProperty, primaryRoom, RESORT, ROOM_NAMES, ROOMS } from './config'
 import { fmtDate, formatINR, monthLabel, parseISO, toISO } from './format'
+import { roomShares, type RoomShare } from './booking'
 import { EXPENSE_CATEGORIES, PAYMENT_METHODS } from './permissions'
 import { colName, dateSerial } from './xlsx'
 import { inrFmt, Workbook, type BorderSide, type CellStyle, type CellValue, type NumFmt, type Sheet } from './xlsxBook'
@@ -34,6 +35,41 @@ export interface ManagementOptions {
   villa: string // "All rooms" or one room / Full Property
   today: string // as-of date for balances and overdue days
   basis?: PeriodBasis // default: stay
+}
+
+// ---------------------------------------------------------------- group bookings by room
+
+/**
+ * The rooms a booking's money is split across, each with its part of the booking total (lib/booking.ts roomShares:
+ * in proportion to the nightly rates when booked). A whole-property booking is one unit (Full Property).
+ */
+export function bookingUnits(b: Booking, data?: Pick<AppData, 'villaOverrides'>): RoomShare[] {
+  const shares = roomShares(b, data)
+  return shares.length ? shares : [{ room: primaryRoom(b.villa), rate: 0, amount: b.total }]
+}
+
+/**
+ * `amount` (any money of the booking: payments, refunds, balance, commission) shared out across its units in the
+ * same proportions as the booking total (equally when the booking is ₹0). Whole rupees that add up to `amount`,
+ * so per-room figures always total the booking.
+ */
+export function splitAmount(amount: number, units: RoomShare[]): number[] {
+  if (units.length <= 1) return [amount]
+  const whole = units.reduce((s, u) => s + u.amount, 0)
+  const weights = whole > 0 && units.every((u) => u.amount >= 0) ? units.map((u) => u.amount) : units.map(() => 1)
+  const sumW = weights.reduce((s, w) => s + w, 0)
+  let given = 0
+  return units.map((_, i) => {
+    const v = i === units.length - 1 ? amount - given : Math.round((amount * weights[i]) / sumW)
+    given += v
+    return v
+  })
+}
+
+/** The part of `amount` that belongs to `room` (0 when the booking doesn't use that room). */
+export function amountForRoom(amount: number, units: RoomShare[], room: string): number {
+  const i = units.findIndex((u) => u.room === room)
+  return i < 0 ? 0 : splitAmount(amount, units)[i]
 }
 
 // ---------------------------------------------------------------- figures
@@ -852,7 +888,7 @@ function monthly(ctx: Ctx) {
   void tb
 }
 
-function roomSummary(ctx: Ctx) {
+function roomSummary(ctx: Ctx, appData: AppData) {
   const { wb, t, m } = ctx
   const sh = wb.sheet('Room Summary')
   sh.tabColor = C.maroon
@@ -871,18 +907,43 @@ function roomSummary(ctx: Ctx) {
     { title: 'Share of Net Revenue', width: 12, kind: 'pct', total: 'none' },
   ]
   widths(sh, cols)
-  frame(sh, ctx, cols.length, `Room Summary · ${m.periodLabel}`, 'Bookings checking in during the period, by room. A booking of several rooms counts under its first room and a whole-property booking under Full Property, as on the Accounting page.')
+  frame(sh, ctx, cols.length, `Room Summary · ${m.periodLabel}`, 'Bookings checking in during the period, by room. A group booking (several rooms) is split across its rooms in proportion to each room’s nightly rate when booked; it counts once in each of its rooms, and once in the Total. A whole-property booking counts under Full Property.')
+  const unitsOf = new Map<Booking, RoomShare[]>()
+  const units = (b: Booking) => {
+    let u = unitsOf.get(b)
+    if (!u) { u = bookingUnits(b, appData); unitsOf.set(b, u) }
+    return u
+  }
+  const has = (b: Booking, name: string) => units(b).some((u) => u.room === name)
+  const part = (b: Booking, amount: number, name: string) => amountForRoom(amount, units(b), name)
+  // guests shared out evenly across a group booking's rooms (whole guests, adding up to the booking's guests)
+  const guestsIn = (b: Booking, name: string) => {
+    const u = units(b)
+    const i = u.findIndex((x) => x.room === name)
+    if (i < 0) return 0
+    return Math.floor(b.guests / u.length) + (i < b.guests % u.length ? 1 : 0)
+  }
+  // room-nights: each room of a group booking counts its own nights; a whole-property booking counts every unit
+  const nightsIn = (f: BookingFacts, name: string) => (!has(f.b, name) ? 0 : units(f.b).length > 1 ? f.nights : f.roomNights)
+  const b2bIn = (l: B2bLine, name: string) => (l.booking ? part(l.booking, l.e.amount, name) : primaryRoom(l.e.villa) === name ? l.e.amount : 0)
+
   const standard = [...ROOM_NAMES, FULL_PROPERTY]
-  const seen = [...m.stays.map((f) => primaryRoom(f.b.villa)), ...m.b2bStay.map((l) => primaryRoom(l.booking?.villa ?? l.e.villa))]
+  const seen = [
+    ...m.stays.flatMap((f) => units(f.b).map((u) => u.room)),
+    ...m.b2bStay.flatMap((l) => (l.booking ? units(l.booking).map((u) => u.room) : [primaryRoom(l.e.villa)])),
+  ]
   const names = [...standard, ...[...new Set(seen)].filter((n) => !standard.includes(n)).sort()]
   const data = names.map((name) => {
-    const st = m.stays.filter((f) => primaryRoom(f.b.villa) === name)
+    const st = m.stays.filter((f) => has(f.b, name))
     const act = st.filter((f) => !f.cancelled)
-    const billed = sum(act, (f) => f.billed)
-    const retained = sum(st, (f) => f.retained)
-    const b2b = sum(m.b2bStay.filter((l) => primaryRoom(l.booking?.villa ?? l.e.villa) === name), (l) => l.e.amount)
-    return { name, row: [name, act.length, sum(act, (f) => f.roomNights), sum(act, (f) => f.b.guests), billed, retained, b2b, billed + retained - b2b, sum(st, (f) => f.received), sum(act, (f) => Math.max(0, f.balance))] as (string | number)[] }
+    const billed = sum(act, (f) => part(f.b, f.billed, name))
+    const retained = sum(st, (f) => part(f.b, f.retained, name))
+    const b2b = sum(m.b2bStay, (l) => b2bIn(l, name))
+    return { name, row: [name, act.length, sum(act, (f) => nightsIn(f, name)), sum(act, (f) => guestsIn(f.b, name)), billed, retained, b2b, billed + retained - b2b, sum(st, (f) => part(f.b, f.received, name)), sum(act, (f) => part(f.b, Math.max(0, f.balance), name))] as (string | number)[] }
   }).filter((d) => d.row.slice(1).some((v) => v !== 0) || (m.villa === ALL_ROOMS && d.name !== FULL_PROPERTY))
+  // a group booking appears in each of its rooms; the Total counts every booking once (as the Monthly sheet)
+  const counted = new Set(data.map((d) => d.name))
+  const bookingsTotal = m.active.filter((f) => units(f.b).some((u) => counted.has(u.room))).length
   const netTotal = sum(data, (d) => d.row[7] as number)
   const first = 8
   const totalRow = first + data.length
@@ -890,7 +951,10 @@ function roomSummary(ctx: Ctx) {
   const tb = table(sh, ctx, 7, cols, rows, {
     filter: false,
     marks: { 1: 'rooms.bookings', 4: 'rooms.billed', 7: 'rooms.net', 9: 'rooms.outstanding' },
-    customTotal: { 10: { f: `IF(${ref(8, totalRow)}=0,0,1)`, v: netTotal ? 1 : 0 } },
+    customTotal: {
+      1: { f: String(bookingsTotal), v: bookingsTotal },
+      10: { f: `IF(${ref(8, totalRow)}=0,0,1)`, v: netTotal ? 1 : 0 },
+    },
   })
   // share column as live formulas against the Total row
   rows.forEach((r, i) => {
@@ -1173,7 +1237,9 @@ function appFigures(data: AppData, m: ManagementModel) {
   const stays = data.bookings.filter((b) => villaOk(b.villa) && inRange(b.checkIn))
   const expensesTotal = sum(data.expenses.filter((e) => villaOk(e.villa) && !(e.category === B2B_CATEGORY && e.external) && inRange(e.date)), (e) => e.amount)
 
-  // Accounting page on the same basis (Accounting.tsx): each booking and expense counts under its first room
+  // Accounting page on the same basis (Accounting.tsx). Its All rooms totals count each booking and expense once,
+  // under its first room (a group booking is split by room only in its per-room rows); the Accounting checks
+  // below run for All rooms only
   const stayRefs = new Set(data.bookings.filter((b) => inRange(b.checkIn)).map((b) => b.ref.toLowerCase()))
   const knownRefs = new Set(data.bookings.map((b) => b.ref.toLowerCase()))
   const b2bOk = (e: Expense) => {
@@ -1344,7 +1410,7 @@ function balanceCheck(ctx: Ctx, data: AppData) {
   r = rowsOut(r, toApp)
   const last = r - 1
   if (m.villa !== ALL_ROOMS) {
-    sh.set(r + 1, 1, 'The Accounting page is left out here: it counts a booking of several rooms under its first room only, so its figures for one room differ by design.', t.desc)
+    sh.set(r + 1, 1, 'The Accounting page is left out here: for one room it counts only that room’s share of a group booking, while this workbook lists every booking that uses the room in full, so they differ by design.', t.desc)
     sh.merge(r + 1, 1, r + 1, 6)
   }
 
@@ -1428,7 +1494,7 @@ function setupSheet(ctx: Ctx, o: { generatedAt: Date; generatedBy?: string }, da
     'Net revenue, Stay month: billed + retained − all B2B commission. Cash date: money received after refunds − B2B commission paid out (commission a partner kept never reached the resort). Net profit = net revenue − operating expenses; net margin = net profit ÷ income.',
     'Balance due = total − payments received (less refunds) − commission kept by the partner, as of the “balances as of” date. Days overdue count from check-out.',
     'Room-nights = nights × rooms in a booking (Full Property = every unit). Nights booked by unit (Room Summary) counts the nights each unit is booked within the period; overlapping bookings count once.',
-    'Room Summary counts a booking of several rooms under its first room, and a whole-property booking under Full Property, as on the Accounting page.',
+    'Room Summary splits a group booking (several rooms) across its rooms in proportion to each room’s nightly rate when booked, as on the Accounting page: its billed, received, outstanding and B2B commission are shared out in whole rupees, each room counts its own room-nights, and guests are shared out evenly. The booking counts once in each of its rooms and once in the Total. A whole-property booking counts under Full Property.',
     'Bank & digital = UPI, card and bank transfer. A payment with no method counts as cash, as in the app. Use “Net bank & digital credits” (Cash Flow) or the Payments summary to tick off the bank statement.',
     'Total credited = payments received before refunds, the same figure as Reports → Payments & Refunds (Cash date); refunds are shown on their own line, and “net” figures are after refunds.',
     'The Balance Check sheet works out each key figure two ways (across these sheets, and with the rules of Resoria’s own screens) and shows the difference; ✓ means it balances.',
@@ -1462,7 +1528,7 @@ export function buildManagementReport(data: AppData, o: ManagementOptions & { ge
   pnl(ctx)
   monthly(ctx)
   cashFlow(ctx)
-  roomSummary(ctx)
+  roomSummary(ctx, data)
   receivables(ctx)
   b2bSheet(ctx)
   bookingsSheet(ctx)

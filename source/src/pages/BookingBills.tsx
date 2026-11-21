@@ -4,16 +4,17 @@ import { Printer } from 'lucide-react'
 import { useStore } from '../data/store'
 import { RESORT } from '../lib/config'
 import {
-  chargesTotal, extrasCollected, fmtDateTime, fmtDateTimeShort, fmtStay, isCancelled, isCompleted, nightsOf, paymentType,
-  refundInfo, roomLabel, roomPaid, sourceLine,
+  chargesDue, chargesTotal, extrasCollected, fmtDateTime, fmtDateTimeShort, fmtStay, isCancelled, isCompleted, nightsOf,
+  paymentType, refundInfo, roomBalance, roomLabel, roomPaid, sourceLine,
 } from '../lib/booking'
 import { TODAY_ISO, fmtDate, formatINR } from '../lib/format'
 import { outlineBtnCls, refCardCls, solidBtnCls } from '../components/styles'
-import { chargesInOrder, receiptsOf } from '../components/booking-detail/helpers'
+import { chargesInOrder, ledgerOrder, receiptsOf } from '../components/booking-detail/helpers'
 import type { Booking, BookingCharge, Payment } from '../types'
 
 const enc = encodeURIComponent
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`
+type ReceiptRow = { p: Payment; no: string }
 
 // ---- Building blocks -------------------------------------------------------
 
@@ -86,7 +87,9 @@ function KeyValue({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function Totals({ rows }: { rows: { label: string; value: string; strong?: boolean; tone?: string }[] }) {
+type TotalRow = { label: string; value: string; strong?: boolean; tone?: string }
+
+function Totals({ rows }: { rows: TotalRow[] }) {
   return (
     <div className="ml-auto mt-4 w-full max-w-xs space-y-1.5">
       {rows.map((r) => (
@@ -99,14 +102,36 @@ function Totals({ rows }: { rows: { label: string; value: string; strong?: boole
   )
 }
 
+/** A titled part of the combined bill (Advance bill, Remaining bill, …). */
+function BillSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mt-8 print:break-inside-avoid">
+      <h2 className="font-display text-xl font-semibold text-dark">{title}</h2>
+      <div className="mt-3">{children}</div>
+    </section>
+  )
+}
+
+/** The cancellation policy from Configuration → Invoice (nothing when it's blank). */
+function PolicyBlock({ text }: { text: string }) {
+  if (!text.trim()) return null
+  return (
+    <div className="mt-6 rounded-2xl border border-[#e6e1d6] px-5 py-4 print:break-inside-avoid">
+      <Caps>Cancellation policy</Caps>
+      <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-700">{text.trim()}</p>
+    </div>
+  )
+}
+
 const th = 'border-b border-[#e6e1d6] py-2 pr-3 text-left text-xs font-semibold uppercase tracking-[0.1em] text-slate-500 last:pr-0'
 const td = 'border-b border-[#efece4] py-2.5 pr-3 text-sm text-dark last:pr-0'
 
-function ChargesTable({ charges }: { charges: BookingCharge[] }) {
+function ChargesTable({ charges, paidBy }: { charges: BookingCharge[]; paidBy?: (c: BookingCharge) => ReactNode }) {
   const total = charges.reduce((s, c) => s + c.total, 0)
+  const cols = paidBy ? 7 : 6
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[520px] border-collapse">
+      <table className={`w-full ${paidBy ? 'min-w-[620px]' : 'min-w-[520px]'} border-collapse`}>
         <thead>
           <tr>
             <th className={th}>Item</th>
@@ -115,6 +140,7 @@ function ChargesTable({ charges }: { charges: BookingCharge[] }) {
             <th className={`${th} !text-right`}>Rate</th>
             <th className={th}>Date / Time</th>
             <th className={`${th} !text-right`}>Total</th>
+            {paidBy && <th className={`${th} !text-right`}>Paid</th>}
           </tr>
         </thead>
         <tbody>
@@ -126,6 +152,7 @@ function ChargesTable({ charges }: { charges: BookingCharge[] }) {
               <td className={`${td} nums text-right`}>{formatINR(c.rate)}</td>
               <td className={`${td} nums whitespace-nowrap`}>{fmtDateTimeShort(c.at) || '—'}</td>
               <td className={`${td} nums text-right font-medium`}>{formatINR(c.total)}</td>
+              {paidBy && <td className={`${td} nums whitespace-nowrap text-right`}>{paidBy(c)}</td>}
             </tr>
           ))}
         </tbody>
@@ -133,8 +160,41 @@ function ChargesTable({ charges }: { charges: BookingCharge[] }) {
           <tr>
             <td colSpan={5} className="pt-3 pr-3 text-right text-[15px] font-semibold text-dark">Total additional expenses</td>
             <td className="nums pt-3 text-right text-[15px] font-semibold text-dark">{formatINR(total)}</td>
+            {cols === 7 && <td />}
           </tr>
         </tfoot>
+      </table>
+    </div>
+  )
+}
+
+/** Receipts of one kind: receipt no., date, method, reference, amount. */
+function ReceiptTable({ rows }: { rows: ReceiptRow[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[520px] border-collapse">
+        <thead>
+          <tr>
+            <th className={th}>Receipt</th>
+            <th className={th}>Date</th>
+            <th className={th}>Method</th>
+            <th className={th}>Reference</th>
+            <th className={`${th} !text-right`}>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ p, no }) => (
+            <tr key={p.id}>
+              <td className={`${td} nums whitespace-nowrap`}>{no}</td>
+              <td className={`${td} nums whitespace-nowrap`}>{fmtDate(p.date)}</td>
+              <td className={td}>{p.method || '—'}</td>
+              <td className={`${td} break-all`}>{p.reference || '—'}</td>
+              <td className={`${td} nums whitespace-nowrap text-right font-medium ${p.kind === 'refund' ? 'text-[#a3261b]' : ''}`}>
+                {p.kind === 'refund' ? '−' : ''}{formatINR(p.amount)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
       </table>
     </div>
   )
@@ -149,16 +209,37 @@ function Footer({ note }: { note: string }) {
   )
 }
 
+// ---- Room money as of one payment (Remaining bill) ----------------------------
+
+const isRoom = (p: Payment) => p.purpose !== 'extras'
+
+/**
+ * The room balance around one Remaining payment, from the payments recorded before it in ledger order,
+ * so a receipt printed again later still shows the balance as it was at that payment.
+ */
+function roomStatementAt(b: Booking, payment: Payment) {
+  const ledger = ledgerOrder(b)
+  const idx = ledger.findIndex((x) => x.id === payment.id)
+  const before = idx >= 0 ? ledger.slice(0, idx) : ledger.filter((x) => x.id !== payment.id)
+  const advance = before.filter((x) => isRoom(x) && x.kind === 'payment' && x.advance).reduce((s, x) => s + x.amount, 0)
+  const earlier = before.filter((x) => isRoom(x) && x.kind === 'payment' && !x.advance).reduce((s, x) => s + x.amount, 0)
+  const refunded = before.filter((x) => isRoom(x) && x.kind === 'refund').reduce((s, x) => s + x.amount, 0)
+  const partner = b.b2bExternal ?? 0
+  const balance = Math.max(0, b.total - advance - earlier + refunded - partner - payment.amount)
+  return { advance, earlier, refunded, partner, balance }
+}
+
 // ---- One payment receipt ----------------------------------------------------
 
-function Receipt({ booking: b, payment: p, no, first }: { booking: Booking; payment: Payment; no: string; first: boolean }) {
+function Receipt({ booking: b, payment: p, no, first, policy }: { booking: Booking; payment: Payment; no: string; first: boolean; policy: string }) {
   const type = paymentType(p)
   const refund = p.kind === 'refund'
   const charges = type === 'Expenses' ? chargesInOrder(b).filter((c) => c.paymentId === p.id) : []
   const info = refund ? refundInfo(b) : null
+  const room = type === 'Remaining' ? roomStatementAt(b, p) : null
   return (
     <Sheet first={first}>
-      <ResortHeader title={refund ? 'Refund receipt' : 'Payment receipt'} number={no} date={fmtDate(p.date)} />
+      <ResortHeader title={refund ? 'Refund receipt' : `${type === 'Expenses' ? 'Additional expenses' : type} bill`} number={no} date={fmtDate(p.date)} />
       <GuestStay booking={b} guestLabel={refund ? 'Refunded to' : 'Received from'} />
 
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-start">
@@ -178,6 +259,36 @@ function Receipt({ booking: b, payment: p, no, first }: { booking: Booking; paym
           </div>
         </div>
       </div>
+
+      {type === 'Advance' && (
+        <div className="mt-8 print:break-inside-avoid">
+          <Caps>Room charges</Caps>
+          <div className="mt-2">
+            <KeyValue label="Room amount">{formatINR(b.total)}</KeyValue>
+            <KeyValue label="Advance received">{formatINR(p.amount)}</KeyValue>
+            <KeyValue label="Balance payable">{formatINR(Math.max(0, b.total - p.amount))}</KeyValue>
+          </div>
+        </div>
+      )}
+      {type === 'Advance' && <PolicyBlock text={policy} />}
+
+      {room && (
+        <div className="mt-8 print:break-inside-avoid">
+          <Caps>Payment summary</Caps>
+          <div className="mt-2">
+            <KeyValue label="Room amount">{formatINR(b.total)}</KeyValue>
+            <KeyValue label="Advance paid">{formatINR(room.advance)}</KeyValue>
+            {room.earlier > 0 && <KeyValue label="Earlier payments">{formatINR(room.earlier)}</KeyValue>}
+            {room.refunded > 0 && <KeyValue label="Refunded">−{formatINR(room.refunded)}</KeyValue>}
+            {room.partner > 0 && <KeyValue label="Collected by booking partner">{formatINR(room.partner)}</KeyValue>}
+            <KeyValue label="This payment">{formatINR(p.amount)}</KeyValue>
+            <div className="flex justify-between gap-6 pt-2.5 text-[15px] font-semibold text-dark">
+              <span>Balance remaining</span>
+              <span className={`nums ${room.balance > 0 ? 'text-due' : ''}`}>{formatINR(room.balance)}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {info && (
         <div className="mt-8 print:break-inside-avoid">
@@ -207,16 +318,26 @@ function Receipt({ booking: b, payment: p, no, first }: { booking: Booking; paym
   )
 }
 
-// ---- Booking summary / final bill ------------------------------------------
+// ---- One bill: advance, remaining and expense bills together -------------------
 
-function SummaryBill({ booking: b, receipts, first }: { booking: Booking; receipts: { p: Payment; no: string }[]; first: boolean }) {
+function OneBill({ booking: b, receipts, policy }: { booking: Booking; receipts: ReceiptRow[]; policy: string }) {
   const cancelled = isCancelled(b)
   const charges = chargesInOrder(b)
   const partner = b.b2bExternal ?? 0
-  const title = isCompleted(b) ? 'Final bill' : cancelled ? 'Cancellation statement' : 'Booking statement'
+  const title = isCompleted(b) ? 'Final bill' : cancelled ? 'Cancellation statement' : 'Booking bill'
   const nights = nightsOf(b)
 
-  let totals: { label: string; value: string; strong?: boolean; tone?: string }[]
+  const advances = receipts.filter((r) => paymentType(r.p) === 'Advance')
+  const remaining = receipts.filter((r) => paymentType(r.p) === 'Remaining')
+  const expenseReceipts = receipts.filter((r) => paymentType(r.p) === 'Expenses')
+  const refunds = receipts.filter((r) => r.p.kind === 'refund')
+  const noOf = new Map(receipts.map((r) => [r.p.id, r.no]))
+
+  const advancePaid = advances.reduce((s, r) => s + r.p.amount, 0)
+  const remainingPaid = remaining.reduce((s, r) => s + r.p.amount, 0)
+  const roomRefunded = refunds.filter((r) => isRoom(r.p)).reduce((s, r) => s + r.p.amount, 0)
+
+  let totals: TotalRow[]
   if (cancelled) {
     const info = refundInfo(b)
     totals = [
@@ -235,12 +356,15 @@ function SummaryBill({ booking: b, receipts, first }: { booking: Booking; receip
       { label: 'Other expenses', value: formatINR(chargesTotal(b)) },
       { label: 'Total billed', value: formatINR(billed), strong: true },
       { label: 'Total received', value: formatINR(received) },
-      { label: 'Balance due', value: formatINR(Math.max(0, billed - received)), strong: true },
+      { label: 'Balance due', value: formatINR(Math.max(0, billed - received)), strong: true, tone: billed - received > 0 ? 'text-due' : '' },
     ]
   }
 
+  const showRemaining = remaining.length > 0 || (!cancelled && b.total > 0)
+  const due = chargesDue(b)
+
   return (
-    <Sheet first={first}>
+    <Sheet first>
       <ResortHeader title={title} number={b.ref} date={`Issued ${fmtDate(TODAY_ISO)}`} />
       <GuestStay booking={b} guestLabel="Billed to" />
 
@@ -251,6 +375,7 @@ function SummaryBill({ booking: b, receipts, first }: { booking: Booking; receip
           {' · '}{(b.cancellationCharge ?? 0) > 0 ? `Cancellation charges ${formatINR(b.cancellationCharge ?? 0)} applied` : 'No cancellation charges'}
         </p>
       )}
+
       <table className="w-full border-collapse">
         <thead>
           <tr>
@@ -266,82 +391,90 @@ function SummaryBill({ booking: b, receipts, first }: { booking: Booking; receip
             </td>
             <td className={`${td} nums text-right font-medium ${cancelled ? 'text-slate-400 line-through' : ''}`}>{formatINR(b.total)}</td>
           </tr>
-          {charges.map((c) => (
-            <tr key={c.id}>
-              <td className={td}>
-                {c.item}{c.qty > 1 && <> × {c.qty}</>} <span className="text-slate-500">· {c.category}</span>
-                <div className="nums text-xs text-slate-500">{fmtDateTimeShort(c.at)}{c.qty > 1 ? ` · ${formatINR(c.rate)} each` : ''}</div>
-              </td>
-              <td className={`${td} nums text-right font-medium`}>{formatINR(c.total)}</td>
+          {charges.length > 0 && (
+            <tr>
+              <td className={td}>Additional expenses · {plural(charges.length, 'item')} <span className="text-slate-500">(itemised below)</span></td>
+              <td className={`${td} nums text-right font-medium`}>{formatINR(chargesTotal(b))}</td>
             </tr>
-          ))}
+          )}
         </tbody>
       </table>
 
-      {(receipts.length > 0 || partner > 0) && (
-        <div className="mt-8 print:break-inside-avoid">
-          <Caps>Payments</Caps>
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[480px] border-collapse">
-              <thead>
-                <tr>
-                  <th className={th}>Receipt</th>
-                  <th className={th}>Date</th>
-                  <th className={th}>Type</th>
-                  <th className={th}>Method</th>
-                  <th className={`${th} !text-right`}>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {receipts.map(({ p, no }) => (
-                  <tr key={p.id}>
-                    <td className={`${td} nums whitespace-nowrap`}>{no}</td>
-                    <td className={`${td} nums whitespace-nowrap`}>{fmtDate(p.date)}</td>
-                    <td className={td}>{paymentType(p)}</td>
-                    <td className={td}>{p.method || '—'}</td>
-                    <td className={`${td} nums whitespace-nowrap text-right font-medium ${p.kind === 'refund' ? 'text-[#a3261b]' : ''}`}>
-                      {p.kind === 'refund' ? '−' : ''}{formatINR(p.amount)}
-                    </td>
-                  </tr>
-                ))}
-                {partner > 0 && (
-                  <tr>
-                    <td className={td}>—</td>
-                    <td className={td}>—</td>
-                    <td className={td}>Payment</td>
-                    <td className={td}>Booking partner</td>
-                    <td className={`${td} nums text-right font-medium`}>{formatINR(partner)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {advances.length > 0 && (
+        <BillSection title="Advance bill">
+          <ReceiptTable rows={advances} />
+          <PolicyBlock text={policy} />
+        </BillSection>
       )}
 
-      <div className="print:break-inside-avoid">
+      {showRemaining && (
+        <BillSection title="Remaining bill">
+          {remaining.length > 0
+            ? <ReceiptTable rows={remaining} />
+            : <p className="text-sm text-slate-500">No remaining payment received yet.</p>}
+          {!cancelled && (
+            <Totals rows={[
+              { label: 'Room amount', value: formatINR(b.total) },
+              { label: 'Advance paid', value: formatINR(advancePaid) },
+              { label: 'Remaining paid', value: formatINR(remainingPaid) },
+              ...(partner > 0 ? [{ label: 'Collected by booking partner', value: formatINR(partner) }] : []),
+              ...(roomRefunded > 0 ? [{ label: 'Refunded', value: `−${formatINR(roomRefunded)}` }] : []),
+              { label: 'Room balance', value: formatINR(roomBalance(b)), strong: true, tone: roomBalance(b) > 0 ? 'text-due' : '' },
+            ]} />
+          )}
+        </BillSection>
+      )}
+
+      {charges.length > 0 && (
+        <BillSection title="Additional expenses bill">
+          <ChargesTable
+            charges={charges}
+            paidBy={(c) => (c.paymentId
+              ? <span className="text-slate-600">{noOf.get(c.paymentId) ?? 'Paid'}</span>
+              : <span className="text-due">Due at checkout</span>)}
+          />
+          {expenseReceipts.length > 0 && (
+            <div className="mt-4">
+              <Caps>Collected</Caps>
+              <div className="mt-2"><ReceiptTable rows={expenseReceipts} /></div>
+            </div>
+          )}
+          {due > 0 && !cancelled && (
+            <p className="mt-3 text-right text-sm font-medium text-due">{formatINR(due)} due at checkout</p>
+          )}
+        </BillSection>
+      )}
+
+      {refunds.length > 0 && (
+        <BillSection title="Refunds">
+          <ReceiptTable rows={refunds} />
+        </BillSection>
+      )}
+
+      <div className="mt-6 print:break-inside-avoid">
         <Totals rows={totals} />
       </div>
-      <Footer note="This is a computer-generated statement and needs no signature." />
+      <Footer note="This is a computer-generated bill and needs no signature." />
     </Sheet>
   )
 }
 
 // ---- Page --------------------------------------------------------------------
 
-/** Printable bills: one receipt (?payment=<id>) or every bill of the booking, then the summary. */
+/** Printable bills: one receipt (?payment=<id>), or one bill with the advance, remaining and expense bills together. */
 export function BookingBills() {
   const { ref = '' } = useParams<{ ref: string }>()
   const [params] = useSearchParams()
   const paymentId = params.get('payment')
   const { data } = useStore()
+  const policy = data.invoice.cancellationPolicy ?? ''
   const booking = data.bookings.find((b) => b.ref === ref) ?? data.bookings.find((b) => b.ref.toLowerCase() === ref.toLowerCase())
 
   const receipts = booking ? receiptsOf(booking) : []
   const single = paymentId ? receipts.find((r) => r.p.id === paymentId) : undefined
 
   // The page title is the default file name for "Save as PDF"
-  const docTitle = single ? `Receipt ${single.no}` : `Bills ${booking?.ref ?? ref}`
+  const docTitle = single ? `Receipt ${single.no}` : `Bill ${booking?.ref ?? ref}`
   useEffect(() => {
     const previous = document.title
     document.title = `${docTitle} · ${RESORT.name}`
@@ -354,7 +487,7 @@ export function BookingBills() {
       <Link to={backTo} className="text-[15px] text-slate-600 hover:text-dark">← {booking ? 'Back to booking' : 'All bookings'}</Link>
       {booking && (
         <div className="flex flex-wrap gap-2.5">
-          {paymentId && receipts.length > 1 && <Link to={`/bookings/${enc(booking.ref)}/bills`} className={outlineBtnCls}>All bills</Link>}
+          {paymentId && receipts.length > 1 && <Link to={`/bookings/${enc(booking.ref)}/bills`} className={outlineBtnCls}>One bill</Link>}
           {(!paymentId || single) && (
             <button type="button" onClick={() => window.print()} className={solidBtnCls}><Printer size={17} /> Print / Save as PDF</button>
           )}
@@ -380,16 +513,9 @@ export function BookingBills() {
     <div className="mx-auto max-w-3xl">
       {toolbar}
       <h1 className="sr-only">{docTitle}</h1>
-      <div className="space-y-6 print:space-y-0">
-        {single ? (
-          <Receipt booking={booking} payment={single.p} no={single.no} first />
-        ) : (
-          <>
-            {receipts.map(({ p, no }, i) => (<Receipt key={p.id} booking={booking} payment={p} no={no} first={i === 0} />))}
-            <SummaryBill booking={booking} receipts={receipts} first={receipts.length === 0} />
-          </>
-        )}
-      </div>
+      {single
+        ? <Receipt booking={booking} payment={single.p} no={single.no} first policy={policy} />
+        : <OneBill booking={booking} receipts={receipts} policy={policy} />}
     </div>
   )
 }

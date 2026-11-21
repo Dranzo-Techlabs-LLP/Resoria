@@ -227,3 +227,39 @@ export function commissionPaid(data: AppData, ref: string): number {
     .filter((e) => e.category === 'B2B Commission' && e.bookingRef?.toLowerCase() === r)
     .reduce((s, e) => s + e.amount, 0)
 }
+
+// ---- Group bookings: room-wise amounts ----------------------------------
+
+export interface RoomShare { room: string; rate: number; amount: number }
+
+/**
+ * A booking's room amount split by room. Each room gets a share of the booking total in proportion to its
+ * nightly rate when booked (`roomRates`; older bookings use the room's current rate), or an equal share when
+ * no rates are known. Shares are whole rupees and add up to the booking total. A whole-property booking is one
+ * line (FULL_PROPERTY), as the property is let as a unit.
+ */
+export function roomShares(b: Booking, data?: Pick<AppData, 'villaOverrides'>): RoomShare[] {
+  if (b.villa === FULL_PROPERTY) return [{ room: FULL_PROPERTY, rate: 0, amount: b.total }]
+  const rooms = bookingRooms(b.villa)
+  if (rooms.length === 0) return []
+  const current = (r: string) => data?.villaOverrides[r]?.baseRate ?? ROOMS.find((x) => x.name === r)?.baseRate ?? 0
+  const rates = rooms.map((r) => b.roomRates?.[r] ?? current(r))
+  const weights = rates.every((x) => x > 0) ? rates : rooms.map(() => 1)
+  const sum = weights.reduce((s, w) => s + w, 0)
+  let given = 0
+  return rooms.map((room, i) => {
+    const amount = i === rooms.length - 1 ? b.total - given : Math.round((b.total * weights[i]) / sum)
+    given += amount
+    return { room, rate: rates[i], amount }
+  })
+}
+
+/** The part (0–1) of a booking's money that belongs to one room (1 for a single-room booking). */
+export function roomShareOf(b: Booking, room: string, data?: Pick<AppData, 'villaOverrides'>): number {
+  const shares = roomShares(b, data)
+  if (shares.length <= 1) return shares[0]?.room === room ? 1 : 0
+  const line = shares.find((s) => s.room === room)
+  if (!line) return 0
+  if (b.total > 0) return line.amount / b.total
+  return 1 / shares.length
+}

@@ -84,6 +84,8 @@ export interface Booking {
   charges: BookingCharge[] // additional expenses (In-house)
   events: BookingEvent[] // stay history
   feedbackToken?: string // guest feedback link token ('' until a link is created)
+  /** Nightly rate of each room when booked ({ Haven: 6500, … }): splits a group booking's revenue by room. */
+  roomRates?: Record<string, number>
 }
 
 export interface Expense {
@@ -121,6 +123,8 @@ export interface InvoiceSettings {
   next: number
   padding: number
   terms: string
+  /** Printed on the advance bill (Configuration → Invoice). */
+  cancellationPolicy?: string
   showPayments?: boolean // print every payment entry on the invoice
   showB2b?: boolean // print the booking's B2B commission on the invoice
 }

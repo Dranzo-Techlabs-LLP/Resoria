@@ -35,7 +35,7 @@ function emptyData(): AppData {
     expenses: [],
     users: [],
     roles: [],
-    invoice: { prefix: 'RE-', next: 1, padding: 5, terms: '' },
+    invoice: { prefix: 'RE-', next: 1, padding: 5, terms: '', cancellationPolicy: '' },
     villaOverrides: {},
     settings: emptySettings(),
     inventory: { items: [], movements: [], purchases: [] },
@@ -69,7 +69,7 @@ interface StoreValue {
   /** Throws on failure so the Invoice settings page can show the message. */
   saveInvoice: (s: Partial<InvoiceSettings>) => Promise<void>
   createBooking: (input: BookingWrite) => Promise<string>
-  updateBooking: (ref: string, fields: BookingWrite) => Promise<void>
+  updateBooking: (ref: string, fields: Partial<BookingWrite>) => Promise<void>
   deleteBooking: (ref: string) => Promise<void>
   addPayment: (ref: string, p: Omit<Payment, 'id'>) => Promise<void>
   updatePayment: (id: string, p: Omit<Payment, 'id'>) => Promise<void>
@@ -85,6 +85,7 @@ interface StoreValue {
   checkOut: (ref: string) => Promise<void>
   cancelBooking: (ref: string, cancellationCharge: number) => Promise<void>
   addCharge: (ref: string, c: ChargeWrite) => Promise<void>
+  addCharges: (ref: string, items: ChargeWrite[]) => Promise<void>
   updateCharge: (id: string, c: ChargeWrite) => Promise<void>
   deleteCharge: (id: string) => Promise<void>
   collectCharges: (ref: string, p: { method: string; date: string; reference?: string }) => Promise<void>
@@ -290,7 +291,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [load])
 
   /** Throws on failure (the form shows the message). */
-  const updateBooking = useCallback(async (ref: string, fields: BookingWrite) => {
+  const updateBooking = useCallback(async (ref: string, fields: Partial<BookingWrite>) => {
     const { booking } = await api.updateBooking(ref, fields)
     setData((d) => ({ ...d, bookings: d.bookings.map((b) => (b.ref === ref ? normalizeBooking(booking) : b)) }))
     await load() // refresh payments/expenses (B2B commission) before the booking page opens
@@ -306,6 +307,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     replaceBooking((await api.cancelBooking(ref, charge)).booking)
   }, [])
   const addCharge = useCallback(async (ref: string, c: ChargeWrite) => { replaceBooking((await api.addCharge(ref, c)).booking) }, [])
+  const addCharges = useCallback(async (ref: string, items: ChargeWrite[]) => { replaceBooking((await api.addCharges(ref, items)).booking) }, [])
   const updateCharge = useCallback(async (id: string, c: ChargeWrite) => { replaceBooking((await api.updateCharge(id, c)).booking) }, [])
   const deleteCharge = useCallback(async (id: string) => { replaceBooking((await api.deleteCharge(id)).booking) }, [])
   const collectCharges = useCallback(async (ref: string, p: { method: string; date: string; reference?: string }) => {
@@ -355,8 +357,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setData((d) => ({ ...d, ratings: d.ratings.map((x) => (x.id === id ? rating : x)) }))
   }, [])
   const deleteRating = useCallback(async (id: string) => {
-    await api.deleteRating(id)
+    const r = await api.deleteRating(id)
     setData((d) => ({ ...d, ratings: d.ratings.filter((x) => x.id !== id) }))
+    if (r.booking) replaceBooking(r.booking) // the stay history records the deletion
   }, [])
   const feedbackLink = useCallback(async (ref: string) => {
     const r = await api.feedbackLink(ref)
@@ -398,11 +401,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     data: view, loading, error, clearError, reload: load, refresh,
     addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole,
     saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
-    recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
+    recordPayment, checkIn, checkOut, cancelBooking, addCharge, addCharges, updateCharge, deleteCharge, collectCharges, saveSettings,
     addItem, updateItem, addPurchase, addUsage, addAdjustment, addReturn, payPurchase,
     addRating, updateRating, deleteRating, feedbackLink, renameRoom,
   }), [view, loading, error, clearError, load, refresh, addExpense, updateExpense, deleteExpense, addUser, updateUser, setUserActive, saveRoleRights, addRole, saveInvoice, createBooking, updateBooking, deleteBooking, addPayment, updatePayment, deletePayment, setBookingStatus, saveVillaOverride,
-    recordPayment, checkIn, checkOut, cancelBooking, addCharge, updateCharge, deleteCharge, collectCharges, saveSettings,
+    recordPayment, checkIn, checkOut, cancelBooking, addCharge, addCharges, updateCharge, deleteCharge, collectCharges, saveSettings,
     addItem, updateItem, addPurchase, addUsage, addAdjustment, addReturn, payPurchase,
     addRating, updateRating, deleteRating, feedbackLink, renameRoom])
 

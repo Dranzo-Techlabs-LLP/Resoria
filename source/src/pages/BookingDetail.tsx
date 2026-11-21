@@ -166,13 +166,13 @@ export function BookingDetail() {
         : <span className="text-ok">No outstanding payments · ready for check-out</span>
     }
   } else if (done) {
-    actions = <Link to={billsTo} className={solidBtnCls}>Download all bills</Link>
+    actions = <Link to={billsTo} className={solidBtnCls}>Download One Bill</Link>
   } else if (cancelled) {
     if (refund.remaining > 0) {
       if (canRecord) actions = <button type="button" onClick={() => setPopup({ kind: 'refund' })} className={solidBtnCls}>Refund</button>
       note = <span className="nums text-due">Refund of {formatINR(refund.remaining)} is pending</span>
     } else if (b.payments.length > 0) {
-      actions = <Link to={billsTo} className={solidBtnCls}>Download all bills</Link>
+      actions = <Link to={billsTo} className={solidBtnCls}>Download One Bill</Link>
     }
   }
 

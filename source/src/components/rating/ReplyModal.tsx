@@ -3,14 +3,27 @@ import { useStore } from '../../data/store'
 import { fmtDate } from '../../lib/format'
 import { Modal } from '../ui/Modal'
 import { useToast } from '../ui/Toast'
-import { fieldAreaCls, labelCls, outlineDangerBtnCls } from '../styles'
+import { fieldAreaCls, labelCls, outlineBtnCls, outlineDangerBtnCls } from '../styles'
 import { FormError, PopupActions, SandBox } from '../booking-detail/parts'
 import { StarDisplay } from './Stars'
 import { errText } from './utils'
 import type { Rating } from '../../types'
 
-/** Reply to a review (or edit / remove the reply): the resort's answer or follow-up note. */
-export function ReplyModal({ rating: r, onClose }: { rating: Rating; onClose: () => void }) {
+/** WhatsApp link for an Indian mobile number ("98765 43210" → 919876543210); null when it isn't a phone number. */
+function waLink(phone: string | undefined, text: string): string | null {
+  let digits = (phone ?? '').replace(/\D/g, '')
+  if (digits.length === 10) digits = `91${digits}`
+  else if (digits.length === 11 && digits.startsWith('0')) digits = `91${digits.slice(1)}`
+  if (digits.length < 11 || digits.length > 15) return null
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`
+}
+
+/**
+ * Reply to a review (or edit / remove the reply). The reply is the resort's response to the guest: it is saved
+ * with the review (so the team sees it was answered and it leaves "Needs reply"), and it can be sent to the guest
+ * on WhatsApp when the review belongs to a booking with a phone number.
+ */
+export function ReplyModal({ rating: r, phone, onClose }: { rating: Rating; phone?: string; onClose: () => void }) {
   const { updateRating } = useStore()
   const toast = useToast()
   const had = !!(r.response ?? '').trim()
@@ -18,7 +31,9 @@ export function ReplyModal({ rating: r, onClose }: { rating: Rating; onClose: ()
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  async function save(response: string) {
+  const canWhatsApp = !!waLink(phone, 'x')
+
+  async function save(response: string, send = false) {
     if (response === '' && !had) {
       setError('Write the reply first.')
       return
@@ -27,7 +42,9 @@ export function ReplyModal({ rating: r, onClose }: { rating: Rating; onClose: ()
     setError('')
     try {
       await updateRating(r.id, { response })
-      toast.show(response ? (had ? 'Reply updated' : 'Reply saved') : 'Reply removed', `${r.guest} · ${r.overall}★`)
+      const link = send ? waLink(phone, response) : null
+      if (link) window.open(link, '_blank', 'noopener')
+      toast.show(response ? (link ? 'Reply saved · opening WhatsApp' : had ? 'Reply updated' : 'Reply saved') : 'Reply removed', `${r.guest} · ${r.overall}★`)
       onClose()
     } catch (e) {
       setError(errText(e, 'Could not save the reply. Please try again.'))
@@ -36,7 +53,7 @@ export function ReplyModal({ rating: r, onClose }: { rating: Rating; onClose: ()
   }
 
   return (
-    <Modal title={had ? 'Edit reply' : 'Reply'} subtitle={`${r.guest}${r.bookingRef ? ` · ${r.bookingRef}` : ''}`} size="lg" onClose={() => { if (!busy) onClose() }}>
+    <Modal title={had ? 'Edit reply' : 'Reply to review'} subtitle={`${r.guest}${r.bookingRef ? ` · ${r.bookingRef}` : ''}`} size="lg" onClose={() => { if (!busy) onClose() }}>
       <div className="space-y-4">
         <SandBox>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
@@ -59,12 +76,19 @@ export function ReplyModal({ rating: r, onClose }: { rating: Rating; onClose: ()
             onChange={(e) => { setText(e.target.value); setError('') }}
             autoFocus
           />
-          <p className="mt-1.5 text-[13px] text-slate-500">
-            Kept with the review for the team. To answer the guest, send it on WhatsApp or reply on the review site too.
+          <p className="mt-1.5 text-[13px] leading-relaxed text-slate-500">
+            The resort’s response to this review. It’s saved with the review, so the team can see it has been answered (it leaves
+            “Needs reply”). {canWhatsApp ? 'Use “Save & send on WhatsApp” to send it to the guest as well.' : 'To reach the guest, send it to them too.'}
+            {' '}For a Google or OTA review, post the same reply on that site.
           </p>
         </div>
         <FormError>{error}</FormError>
         <PopupActions onCancel={onClose} onSubmit={() => void save(text.trim())} label="Save reply" busyLabel="Saving…" busy={busy} />
+        {canWhatsApp && (
+          <button type="button" onClick={() => void save(text.trim(), true)} disabled={busy || !text.trim()} className={`${outlineBtnCls} w-full`}>
+            Save &amp; send on WhatsApp
+          </button>
+        )}
         {had && (
           <button type="button" onClick={() => void save('')} disabled={busy} className={`${outlineDangerBtnCls} w-full`}>
             Remove reply

@@ -39,12 +39,13 @@ export function RatingFormModal({ rating, booking, onClose }: { rating?: Rating;
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  // In-house and completed stays, plus the stay this rating is already linked to
+  // In-house and completed stays not rated yet (one rating per stay), plus the stay this rating is already linked to
   const choices = useMemo(() => {
-    const list = rateableBookings(data.bookings)
+    const rated = new Set(data.ratings.map((r) => r.bookingRef).filter(Boolean))
+    const list = rateableBookings(data.bookings).filter((b) => !rated.has(b.ref))
     const linked = rating?.bookingRef ? data.bookings.find((b) => b.ref === rating.bookingRef) : undefined
     return linked && !list.includes(linked) ? [linked, ...list] : list
-  }, [data.bookings, rating?.bookingRef])
+  }, [data.bookings, data.ratings, rating?.bookingRef])
   const sources = rating && !STAFF_SOURCES.some((s) => s === rating.source) ? [...STAFF_SOURCES, rating.source] : STAFF_SOURCES
   const today = todayISO()
 
@@ -109,7 +110,7 @@ export function RatingFormModal({ rating, booking, onClose }: { rating?: Rating;
               }}
             />
             <p id="rating-booking-hint" className="mt-1.5 text-[13px] text-slate-500">
-              Link the stay it’s about (in-house and completed bookings). Leave empty for a public review you can’t match to a booking.
+              Link the stay it’s about (in-house and completed bookings; stays that already have a rating aren’t listed). Leave empty for a public review you can’t match to a booking.
             </p>
           </div>
         )}

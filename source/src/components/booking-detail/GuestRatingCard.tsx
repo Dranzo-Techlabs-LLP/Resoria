@@ -4,7 +4,7 @@ import { can, useAuth } from '../../auth/AuthContext'
 import { useStore } from '../../data/store'
 import { isInHouse } from '../../lib/booking'
 import { useToast } from '../ui/Toast'
-import { linkCls, solidBtnCls } from '../styles'
+import { solidBtnCls } from '../styles'
 import { RatingCard } from '../rating/RatingCard'
 import { RatingFormModal } from '../rating/RatingFormModal'
 import { ReplyModal } from '../rating/ReplyModal'
@@ -14,9 +14,12 @@ import { ConfirmModal } from './PaymentModals'
 import { DetailCard } from './parts'
 import type { Booking, Rating } from '../../types'
 
-type Popup = { kind: 'add' } | { kind: 'edit' | 'reply' | 'delete'; rating: Rating }
+type Popup = { kind: 'add' } | { kind: 'reply' | 'delete'; rating: Rating }
 
-/** In-house and completed stays: the stay's rating(s), or ways to get one. */
+/**
+ * In-house and completed stays: the stay's rating, or ways to get one. A stay has one rating: once it's in,
+ * there's no "Add rating" (delete it first to record a different one); the deletion goes in the stay history.
+ */
 export function GuestRatingCard({ booking: b }: { booking: Booking }) {
   const { user } = useAuth()
   const { data, deleteRating } = useStore()
@@ -29,12 +32,7 @@ export function GuestRatingCard({ booking: b }: { booking: Booking }) {
   return (
     <DetailCard
       title="Guest rating"
-      action={list.length > 0 ? (
-        <span className="flex items-center gap-4 text-sm">
-          {canManage && <button type="button" onClick={() => setPopup({ kind: 'add' })} className={linkCls}>+ Add rating</button>}
-          <Link to="/rating" className="text-slate-600 hover:text-dark">All ratings</Link>
-        </span>
-      ) : undefined}
+      action={list.length > 0 ? <Link to="/rating" className="text-sm text-slate-600 hover:text-dark">All ratings</Link> : undefined}
     >
       {list.length > 0 ? (
         <ul className="divide-y divide-[#efece4]">
@@ -46,7 +44,6 @@ export function GuestRatingCard({ booking: b }: { booking: Booking }) {
                 showBooking={false}
                 canManage={canManage}
                 onReply={() => setPopup({ kind: 'reply', rating: r })}
-                onEdit={() => setPopup({ kind: 'edit', rating: r })}
                 onDelete={() => setPopup({ kind: 'delete', rating: r })}
               />
             </li>
@@ -74,8 +71,7 @@ export function GuestRatingCard({ booking: b }: { booking: Booking }) {
       )}
 
       {popup?.kind === 'add' && <RatingFormModal booking={b} onClose={close} />}
-      {popup?.kind === 'edit' && <RatingFormModal rating={popup.rating} booking={b} onClose={close} />}
-      {popup?.kind === 'reply' && <ReplyModal rating={popup.rating} onClose={close} />}
+      {popup?.kind === 'reply' && <ReplyModal rating={popup.rating} phone={b.phone} onClose={close} />}
       {popup?.kind === 'delete' && (
         <ConfirmModal
           title="Delete rating?"
@@ -90,7 +86,8 @@ export function GuestRatingCard({ booking: b }: { booking: Booking }) {
           }}
         >
           Delete the <span className="font-semibold text-dark">{popup.rating.overall}★</span> rating from {popup.rating.source}
-          {popup.rating.response?.trim() ? ' and its reply' : ''}? This can’t be undone.
+          {popup.rating.response?.trim() ? ' and its reply' : ''}? This can’t be undone; the deletion is recorded in the stay history,
+          and a new rating can then be added for this stay.
         </ConfirmModal>
       )}
     </DetailCard>

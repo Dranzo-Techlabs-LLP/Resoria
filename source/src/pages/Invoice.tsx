@@ -5,8 +5,9 @@ import { capsLabelCls, fieldAreaCls, fieldCls, labelCls, solidBtnCls } from '../
 import { ErrorNote, SavedTag, SectionCard, useSaveState } from '../components/config/kit'
 
 const MAX_TERMS = 20000
+const MAX_POLICY = 3000
 
-/** Configuration → Invoice: reference number series, what prints on the invoice, terms & conditions. */
+/** Configuration → Invoice: reference number series, what prints on the invoice, terms & conditions, cancellation policy. */
 export function InvoiceSettingsSection() {
   const { user } = useAuth()
   const { data, saveInvoice } = useStore()
@@ -17,6 +18,7 @@ export function InvoiceSettingsSection() {
   const [next, setNext] = useState(String(s.next))
   const [padding, setPadding] = useState(String(s.padding))
   const [terms, setTerms] = useState(s.terms)
+  const [policy, setPolicy] = useState(s.cancellationPolicy ?? '')
   const [showPayments, setShowPayments] = useState(!!s.showPayments)
   const { run, saving, error: err, setError: setErr, saved } = useSaveState()
 
@@ -29,7 +31,7 @@ export function InvoiceSettingsSection() {
     if (!Number.isInteger(Number(next)) || Number(next) < 0) { setErr('Next number must be a whole number, 0 or more.'); return }
     // The "show on invoice" options are sent only when changed
     await run(() => saveInvoice({
-      prefix, next: nextNum, padding: pad, terms,
+      prefix, next: nextNum, padding: pad, terms, cancellationPolicy: policy,
       ...(showPayments !== !!s.showPayments ? { showPayments } : {}),
     }))
   }
@@ -81,6 +83,13 @@ export function InvoiceSettingsSection() {
         <textarea rows={10} aria-label="Terms and conditions" value={terms} onChange={(e) => setTerms(e.target.value.slice(0, MAX_TERMS))} disabled={!canEdit}
           className={`${fieldAreaCls} font-mono text-[13px] disabled:bg-sand`} />
         <div className="mt-1 text-right text-xs text-slate-400"><span className="nums">{terms.length.toLocaleString('en-IN')}</span> / {MAX_TERMS.toLocaleString('en-IN')} characters</div>
+      </SectionCard>
+
+      <SectionCard title="Cancellation policy" description="Printed on the advance bill and on the combined booking bill. Leave blank to leave it off. Each line becomes its own line on the bill.">
+        <textarea rows={6} aria-label="Cancellation policy" value={policy} onChange={(e) => setPolicy(e.target.value.slice(0, MAX_POLICY))} disabled={!canEdit}
+          placeholder="e.g. Cancellation 15 days or more before check-in: the advance is refunded in full."
+          className={`${fieldAreaCls} text-[14px] disabled:bg-sand`} />
+        <div className="mt-1 text-right text-xs text-slate-400"><span className="nums">{policy.length.toLocaleString('en-IN')}</span> / {MAX_POLICY.toLocaleString('en-IN')} characters</div>
       </SectionCard>
 
       {canEdit ? (
