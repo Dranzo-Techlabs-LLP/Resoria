@@ -274,7 +274,7 @@ try {
     if ($cur['status'] === 'checked in') {
       foreach (['villa' => 'rooms', 'checkIn' => 'check-in date', 'checkOut' => 'check-out date', 'total' => 'booking amount'] as $key => $label) {
         $col = ['villa' => 'villa', 'checkIn' => 'check_in', 'checkOut' => 'check_out', 'total' => 'total'][$key];
-        if (array_key_exists($key, $b) && trim((string)$b[$key]) !== (string)$cur[$col]) fail("The guest is in-house, so only the guest details can be edited (not the $label).");
+        if (array_key_exists($key, $b) && (!is_scalar($b[$key]) || trim((string)$b[$key]) !== (string)$cur[$col])) fail("The guest is in-house, so only the guest details can be edited (not the $label).");
       }
       // everything but the guest details stays as it is
       foreach (['villa', 'check_in', 'check_out', 'guests', 'adults', 'kids', 'total', 'original_total', 'source', 'source_detail', 'commission', 'notes', 'room_rates'] as $col) {
@@ -391,8 +391,17 @@ try {
     $extra = charges_due($cur['ref']);
     if ($extra > 0) fail('Collect the ' . inr($extra) . ' additional expenses before check-out.');
     $t = now_dt();
-    db()->prepare("UPDATE bookings SET status = 'completed', checked_out_at = ?, completed_at = ? WHERE ref = ?")->execute([$t, $t, $cur['ref']]);
+    // Leaving early: the stay ends today (at least one night), so the rooms are free for the nights not used.
+    // An in-house booking's dates can't be edited, so this is the only place they can be released. The amount stays.
+    $out = $cur['check_out'];
+    $minOut = date('Y-m-d', strtotime($cur['check_in'] . ' +1 day'));
+    $actual = max(date('Y-m-d'), $minOut);
+    if ($actual < $out) $out = $actual;
+    db()->prepare("UPDATE bookings SET status = 'completed', checked_out_at = ?, completed_at = ?, check_out = ? WHERE ref = ?")->execute([$t, $t, $out, $cur['ref']]);
     add_event($cur['ref'], 'Checked out', $t);
+    if ($out !== $cur['check_out']) {
+      add_event($cur['ref'], 'Left early: check-out moved from ' . date('j M Y', strtotime($cur['check_out'])) . ' to ' . date('j M Y', strtotime($out)) . ', so the rooms are free from then', $t);
+    }
     add_event($cur['ref'], 'Booking completed', $t);
     json_out(['booking' => get_booking($cur['ref'])]);
   }
@@ -927,7 +936,8 @@ try {
       $show[$col] = array_key_exists($key, $b) ? (int)$b[$key] : (int)($cur[$col] ?? 0);
     }
     if (array_key_exists('cancellationPolicy', $b)) {
-      $policy = mb_substr(trim((string)$b['cancellationPolicy']), 0, 3000);
+      if (!is_string($b['cancellationPolicy'])) fail('The cancellation policy must be text.');
+      $policy = mb_substr(trim($b['cancellationPolicy']), 0, 3000);
       db()->prepare('UPDATE invoice_settings SET cancellation_policy = ? WHERE id = 1')->execute([$policy]);
     }
     if ($withShow) {

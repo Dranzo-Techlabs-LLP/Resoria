@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { can, useAuth } from '../auth/AuthContext'
 import { useStore } from '../data/store'
 import {
-  chargesDue, fmtDateTime, fmtDateTimeShort, isCancelled, isCompleted, isInHouse, isPreArrival, refundInfo, roomBalance,
+  addDays, chargesDue, fmtDateTime, fmtDateTimeShort, isCancelled, isCompleted, isInHouse, isPreArrival, refundInfo, roomBalance,
   roomLabel, sourceLine, statusLabel,
 } from '../lib/booking'
 import { fmtDate, formatINR, toISO } from '../lib/format'
@@ -121,6 +121,14 @@ export function BookingDetail() {
   const showExpenses = inHouse || done || (b.charges ?? []).length > 0
   // A stay can't start before its check-in date (today is read fresh, so a tab left open overnight is right)
   const early = b.checkIn > toISO(new Date())
+  // Leaving before the booked check-out date: the API moves check-out to today (at least one night), freeing the rooms
+  const earlyOut = (() => {
+    const today = toISO(new Date())
+    if (!inHouse || today >= b.checkOut) return ''
+    const minOut = addDays(b.checkIn, 1)
+    const out = today > minOut ? today : minOut
+    return out < b.checkOut ? out : ''
+  })()
 
   // ---- Header actions (by stage and rights) ----
   let actions: ReactNode = null
@@ -278,6 +286,9 @@ export function BookingDetail() {
         >
           Check <span className="font-semibold text-dark">{b.guest}</span> out of <span className="font-semibold text-dark">{roomLabel(b.villa)}</span> now?
           The booking will be marked Completed and becomes read-only.
+          {earlyOut && (
+            <> The guest is leaving before {fmtDate(b.checkOut)}, so the check-out date moves to {fmtDate(earlyOut)} and the rooms are free from then. The amount stays as booked.</>
+          )}
         </ConfirmModal>
       )}
       {popup?.kind === 'removeCharge' && (
